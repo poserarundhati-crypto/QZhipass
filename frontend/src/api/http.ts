@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { clearLoginInfo } from './session'
+import { clearLoginInfo, readLoginInfo } from './session'
 
 const http = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
@@ -34,6 +34,16 @@ export function getErrorMessage(error: unknown, fallback: string) {
 
   return fallback
 }
+
+http.interceptors.request.use(config => {
+  const accessToken = readLoginInfo()?.accessToken
+
+  if (accessToken && !config.headers.Authorization) {
+    config.headers.Authorization = `Bearer ${accessToken}`
+  }
+
+  return config
+})
 
 http.interceptors.response.use(
   response => response,

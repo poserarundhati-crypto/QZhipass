@@ -1,14 +1,16 @@
 import http, { getErrorMessage } from './http'
 import { saveLoginInfo, type LoginInfo } from './session'
 
-type PortalLoginType = 'MOBILE_PWD' | 'MOBILE_CODE'
+type PortalLoginType = 'MOBILE_PWD' | 'EMAIL_PWD' | 'MOBILE_CODE'
 
 interface PortalLoginResponse {
   success?: boolean
   message?: string
-  data?: Record<string, unknown>
+  data?: unknown
+  payload?: unknown
   user_id?: unknown
   userId?: unknown
+  id?: unknown
   access_token?: unknown
   accessToken?: unknown
   token?: unknown
@@ -25,28 +27,48 @@ export function isValidMobile(mobile: string) {
 }
 
 function readString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : ''
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim()
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+
+  return ''
 }
 
-function normalizeLoginInfo(response: PortalLoginResponse, mobile: string): LoginInfo {
+function readRecord(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
   if (response.success === false) {
     throw new Error(response.message || '登录失败')
   }
 
-  const payload = response.data && typeof response.data === 'object' ? response.data : {}
+  const data = readRecord(response.data)
+  const payload = readRecord(response.payload)
   const userId =
+    readString(data.user_id) ||
+    readString(data.userId) ||
+    readString(data.id) ||
     readString(payload.user_id) ||
     readString(payload.userId) ||
+    readString(payload.id) ||
     readString(response.user_id) ||
-    readString(response.userId)
+    readString(response.userId) ||
+    readString(response.id)
   const accessToken =
+    readString(data.access_token) ||
+    readString(data.accessToken) ||
+    readString(data.token) ||
     readString(payload.access_token) ||
     readString(payload.accessToken) ||
     readString(payload.token) ||
     readString(response.access_token) ||
     readString(response.accessToken) ||
-    readString(response.token) ||
-    readString(response.message)
+    readString(response.token)
 
   if (!userId) {
     throw new Error('登录成功但后端未返回 user_id')
@@ -62,23 +84,78 @@ function normalizeLoginInfo(response: PortalLoginResponse, mobile: string): Logi
   }
 }
 
-async function login(
-  loginType: PortalLoginType,
-  credential: Record<string, string>,
-  mobile: string,
-  fallback: string
-) {
+function normalizeLoginError(message: string, fallback: string) {
+  const rawMessage = message.trim()
+  const lowerMessage = rawMessage.toLowerCase()
+
+  if (!rawMessage) {
+    return fallback
+  }
+
+  if (
+    rawMessage.includes('用户不存在') ||
+    lowerMessage.includes('user not found') ||
+    lowerMessage.includes('user does not exist') ||
+    lowerMessage.includes('user not exist')
+  ) {
+    return '用户不存在'
+  }
+
+  if (rawMessage.includes('注销') || lowerMessage.includes('deactivated')) {
+    return '您的账户已注销'
+  }
+
+  if (
+    rawMessage.includes('密码错误') ||
+    rawMessage.includes('账号或密码') ||
+    lowerMessage.includes('wrong password') ||
+    lowerMessage.includes('bad credentials') ||
+    lowerMessage.includes('invalid credential')
+  ) {
+    return '账号或密码错误'
+  }
+
+  if (
+    lowerMessage.includes('network error') ||
+    lowerMessage.includes('econnrefused') ||
+    lowerMessage.includes('error occurred while trying to proxy')
+  ) {
+    return '后端服务未启动或无法连接'
+  }
+
+  if (
+    lowerMessage.includes('404') ||
+    lowerMessage === 'not found' ||
+    lowerMessage.includes('no static resource') ||
+    lowerMessage.includes('unsupported login type')
+  ) {
+    return '登录接口不可用，请确认后端登录接口已按最新契约启动'
+  }
+
+  if (
+    lowerMessage.includes('request failed with status code 500') ||
+    lowerMessage.includes('request failed with status code 502') ||
+    lowerMessage.includes('request failed with status code 503') ||
+    lowerMessage.includes('request failed with status code 504')
+  ) {
+    return '登录服务异常，请确认后端服务已启动'
+  }
+
+  return rawMessage
+}
+
+async function login(loginType: PortalLoginType, credential: Record<string, string>, fallback: string) {
   try {
     const { data } = await http.post<PortalLoginResponse>('/v1/portal/login', {
       loginType,
       credential
     })
-    const loginInfo = normalizeLoginInfo(data, mobile)
+    const loginInfo = normalizeLoginInfo(data)
 
     saveLoginInfo(loginInfo)
     return loginInfo
   } catch (error) {
-    throw new Error(getErrorMessage(error, fallback))
+    throw new Error(normalizeLoginError(getErrorMessage(error, fallback), fallback))
   }
 }
 
@@ -89,8 +166,18 @@ export async function loginByPassword(mobile: string, password: string) {
       mobile,
       password
     },
-    mobile,
-    '手机号或密码登录失败'
+    '账号或密码错误'
+  )
+}
+
+export async function loginByEmailPassword(email: string, password: string) {
+  return login(
+    'EMAIL_PWD',
+    {
+      email,
+      password
+    },
+    '账号或密码错误'
   )
 }
 
@@ -117,7 +204,6 @@ export async function loginBySms(mobile: string, smsCode: string) {
       mobile,
       smsCode
     },
-    mobile,
     '验证码登录失败'
   )
 }

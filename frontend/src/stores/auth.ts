@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { clearLoginInfo, isLoggedIn, readLoginInfo, type LoginInfo } from '../api/session'
-import { loginByPassword, loginBySms } from '../api/auth'
+import { loginByEmailPassword, loginByPassword, loginBySms } from '../api/auth'
 
 export const useAuthStore = defineStore('auth', () => {
   const profile = ref<LoginInfo | null>(readLoginInfo())
@@ -14,6 +14,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function passwordLogin(mobile: string, password: string) {
     const data = await loginByPassword(mobile, password)
+    setLoginState(data)
+    return data
+  }
+
+  async function emailPasswordLogin(email: string, password: string) {
+    const data = await loginByEmailPassword(email, password)
     setLoginState(data)
     return data
   }
@@ -39,6 +45,7 @@ export const useAuthStore = defineStore('auth', () => {
     profile,
     loggedIn,
     passwordLogin,
+    emailPasswordLogin,
     smsLogin,
     refreshLoginState,
     logout
