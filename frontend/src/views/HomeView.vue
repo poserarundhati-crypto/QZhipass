@@ -10,8 +10,8 @@ const authStore = useAuthStore()
 
 const userId = computed(() => authStore.profile?.userId || '已登录用户')
 
-function logout() {
-  authStore.logout()
+async function logout() {
+  await authStore.logout()
   router.push('/login')
 }
 </script>

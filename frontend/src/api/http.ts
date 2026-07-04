@@ -2,7 +2,7 @@ import axios from 'axios'
 import { clearLoginInfo, readLoginInfo } from './session'
 
 const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:7510',
   timeout: 10000,
   withCredentials: true
 })
@@ -48,7 +48,7 @@ http.interceptors.request.use(config => {
 http.interceptors.response.use(
   response => response,
   error => {
-    if (axios.isAxiosError(error) && error.response?.status === 401) {
+    if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
       clearLoginInfo()
 
       if (window.location.pathname !== '/login') {

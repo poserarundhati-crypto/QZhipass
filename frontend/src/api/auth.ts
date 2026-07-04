@@ -1,7 +1,7 @@
 import http, { getErrorMessage } from './http'
-import { saveLoginInfo, type LoginInfo } from './session'
+import { readAuthCookies, saveLoginInfo, type LoginInfo } from './session'
 
-type PortalLoginType = 'MOBILE_PWD' | 'EMAIL_PWD' | 'MOBILE_CODE'
+type PortalLoginType = 'MOBILE_PWD' | 'EMAIL_PWD' | 'smsLogin' | 'wechatLogin'
 
 interface PortalLoginResponse {
   success?: boolean
@@ -17,7 +17,7 @@ interface PortalLoginResponse {
 }
 
 interface LoginStatusResponse {
-  login?: boolean
+  success?: boolean
 }
 
 const MOBILE_PATTERN = /^1[3-9]\d{9}$/
@@ -47,6 +47,7 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     throw new Error(response.message || '登录失败')
   }
 
+  const cookieInfo = readAuthCookies()
   const data = readRecord(response.data)
   const payload = readRecord(response.payload)
   const userId =
@@ -58,7 +59,9 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     readString(payload.id) ||
     readString(response.user_id) ||
     readString(response.userId) ||
-    readString(response.id)
+    readString(response.id) ||
+    cookieInfo?.userId ||
+    ''
   const accessToken =
     readString(data.access_token) ||
     readString(data.accessToken) ||
@@ -68,7 +71,9 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     readString(payload.token) ||
     readString(response.access_token) ||
     readString(response.accessToken) ||
-    readString(response.token)
+    readString(response.token) ||
+    cookieInfo?.accessToken ||
+    ''
 
   if (!userId) {
     throw new Error('登录成功但后端未返回 user_id')
@@ -146,9 +151,9 @@ function normalizeLoginError(message: string, fallback: string) {
 
 async function login(loginType: PortalLoginType, credential: Record<string, string>, fallback: string) {
   try {
-    const { data } = await http.post<PortalLoginResponse>('/v1/portal/login', {
+    const { data } = await http.post<PortalLoginResponse>('/api/v1/auth/portal/login', {
       loginType,
-      credential
+      params: credential
     })
     const loginInfo = normalizeLoginInfo(data)
 
@@ -163,7 +168,7 @@ export async function loginByPassword(mobile: string, password: string) {
   return login(
     'MOBILE_PWD',
     {
-      mobile,
+      phone_number: mobile,
       password
     },
     '账号或密码错误'
@@ -183,8 +188,8 @@ export async function loginByEmailPassword(email: string, password: string) {
 
 export async function sendSmsCode(mobile: string) {
   try {
-    const { data } = await http.post<PortalLoginResponse>('/v1/portal/send_code', {
-      Phone: mobile
+    const { data } = await http.post<PortalLoginResponse>('/api/v1/auth/portal/sendcode', {
+      phone: mobile
     })
 
     if (data?.success === false) {
@@ -199,10 +204,10 @@ export async function sendSmsCode(mobile: string) {
 
 export async function loginBySms(mobile: string, smsCode: string) {
   return login(
-    'MOBILE_CODE',
+    'smsLogin',
     {
-      mobile,
-      smsCode
+      phone_number: mobile,
+      sms: smsCode
     },
     '验证码登录失败'
   )
@@ -210,12 +215,19 @@ export async function loginBySms(mobile: string, smsCode: string) {
 
 export async function checkLoginStatus(userId: string) {
   try {
-    const { data } = await http.post<LoginStatusResponse>('/v1/credential/checkstatus', {
-      User_id: userId
-    })
+    void userId
+    const { data } = await http.get<LoginStatusResponse>('/api/v1/token/check')
 
-    return Boolean(data?.login)
+    return Boolean(data?.success)
   } catch {
     return false
+  }
+}
+
+export async function logoutPortal() {
+  try {
+    await http.delete('/api/v1/auth/portal/logout')
+  } catch {
+    // Local login state is still cleared by the store.
   }
 }

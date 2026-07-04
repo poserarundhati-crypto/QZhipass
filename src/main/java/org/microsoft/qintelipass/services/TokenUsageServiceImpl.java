@@ -38,26 +38,30 @@ public class TokenUsageServiceImpl implements TokenUsageService {
             return true;
         }
 
-        String today = getTodayDateString();
-        String usageKey = getUsageKey(today, userId);
-        String rankKey = getRankKey(today);
+        try {
+            String today = getTodayDateString();
+            String usageKey = getUsageKey(today, userId);
+            String rankKey = getRankKey(today);
 
-        Long currentUsage = redisTemplate.opsForValue().increment(usageKey, tokensUsed);
+            Long currentUsage = redisTemplate.opsForValue().increment(usageKey, tokensUsed);
 
-        if (currentUsage != null && currentUsage == tokensUsed) {
-            long ttl = getSecondsUntilMidnight();
-            redisTemplate.expire(usageKey, ttl, TimeUnit.SECONDS);
+            if (currentUsage != null && currentUsage == tokensUsed) {
+                long ttl = getSecondsUntilMidnight();
+                redisTemplate.expire(usageKey, ttl, TimeUnit.SECONDS);
+            }
+
+            ZSetOperations<String, String> zSetOps = redisTemplate.opsForZSet();
+            zSetOps.incrementScore(rankKey, String.valueOf(userId), tokensUsed);
+
+            if (zSetOps.size(rankKey) != null && zSetOps.size(rankKey) == 1) {
+                long ttl = getSecondsUntilMidnight();
+                redisTemplate.expire(rankKey, ttl, TimeUnit.SECONDS);
+            }
+
+            log.debug("Recorded token usage: userId={}, tokens={}, total={}", userId, tokensUsed, currentUsage);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, token usage was not persisted: {}", e.getMessage());
         }
-
-        ZSetOperations<String, String> zSetOps = redisTemplate.opsForZSet();
-        zSetOps.incrementScore(rankKey, String.valueOf(userId), tokensUsed);
-
-        if (zSetOps.size(rankKey) != null && zSetOps.size(rankKey) == 1) {
-            long ttl = getSecondsUntilMidnight();
-            redisTemplate.expire(rankKey, ttl, TimeUnit.SECONDS);
-        }
-
-        log.debug("Recorded token usage: userId={}, tokens={}, total={}", userId, tokensUsed, currentUsage);
         return true;
     }
 
@@ -96,8 +100,14 @@ public class TokenUsageServiceImpl implements TokenUsageService {
         String today = getTodayDateString();
         String rankKey = getRankKey(today);
 
-        Set<ZSetOperations.TypedTuple<String>> tuples = redisTemplate.opsForZSet()
-                .reverseRangeWithScores(rankKey, 0, topN - 1);
+        Set<ZSetOperations.TypedTuple<String>> tuples;
+        try {
+            tuples = redisTemplate.opsForZSet()
+                    .reverseRangeWithScores(rankKey, 0, topN - 1);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, returning empty token rank: {}", e.getMessage());
+            return List.of();
+        }
 
         if (tuples == null || tuples.isEmpty()) {
             return List.of();
@@ -128,7 +138,13 @@ public class TokenUsageServiceImpl implements TokenUsageService {
     @Override
     public long getUserTokenLimit(Long userId) {
         String limitKey = LIMIT_KEY_PREFIX + userId;
-        String limitStr = redisTemplate.opsForValue().get(limitKey);
+        String limitStr;
+        try {
+            limitStr = redisTemplate.opsForValue().get(limitKey);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, using default token limit: {}", e.getMessage());
+            return DEFAULT_TOKEN_LIMIT;
+        }
 
         if (limitStr != null) {
             try {
@@ -147,14 +163,24 @@ public class TokenUsageServiceImpl implements TokenUsageService {
             throw new IllegalArgumentException("Token limit must be positive");
         }
         String limitKey = LIMIT_KEY_PREFIX + userId;
-        redisTemplate.opsForValue().set(limitKey, String.valueOf(limit));
-        log.info("Set token limit: userId={}, limit={}", userId, limit);
+        try {
+            redisTemplate.opsForValue().set(limitKey, String.valueOf(limit));
+            log.info("Set token limit: userId={}, limit={}", userId, limit);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, token limit was not persisted: {}", e.getMessage());
+        }
     }
 
     private long getCurrentTokenUsage(Long userId) {
         String today = getTodayDateString();
         String usageKey = getUsageKey(today, userId);
-        String usageStr = redisTemplate.opsForValue().get(usageKey);
+        String usageStr;
+        try {
+            usageStr = redisTemplate.opsForValue().get(usageKey);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, using zero token usage: {}", e.getMessage());
+            return 0L;
+        }
 
         if (usageStr == null) {
             return 0L;

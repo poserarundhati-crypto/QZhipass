@@ -52,7 +52,7 @@ public class AuthController {
         User user = response.getPayload();
         if (response.isSuccess() && user != null) {
             UserDetails userDetails = userDetailsService.loadUserByUsername(user.getName());
-            String token = jwtUtil.generateToken(userDetails);
+            String token = jwtUtil.generateToken(userDetails, user.getId());
 
             Cookie userIdCookie = new Cookie("user_id", String.valueOf(user.getId()));
             Cookie auth = new Cookie(HEADER, token);
@@ -60,6 +60,7 @@ public class AuthController {
             userIdCookie.setMaxAge(EXPIRATION);
             auth.setPath(COOKIE_ROOT);
             auth.setMaxAge(EXPIRATION);
+            httpResponse.addCookie(userIdCookie);
             httpResponse.addCookie(auth);
             return ResponseEntity.ok(response);
         }
@@ -71,6 +72,11 @@ public class AuthController {
         if (payload.get("phone") != null){
             String code = smsService.sendSmsCode(payload.get("phone"));
             log.info("Sent sms code: {}", code);
+            return ResponseEntity.ok(ResponseBody
+                    .builder()
+                    .success(true)
+                    .message("Sms code sent.")
+                    .build());
         }
         return ResponseEntity
                 .badRequest()

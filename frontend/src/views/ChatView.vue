@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import {
   Bell,
   ChatDotSquare,
@@ -19,9 +20,12 @@ import {
   Upload,
   UserFilled,
 } from '@element-plus/icons-vue'
+import { callAgent } from '../api/agent'
 import BrandLogo from '../components/BrandLogo.vue'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 // ========== state ==========
 const searchQuery = ref('')
@@ -31,10 +35,13 @@ const selectedAgent = ref('data-analyst')
 const selectedChatId = ref(1)
 const showModelDropdown = ref(false)
 const showAgentDropdown = ref(false)
+const agentSearchQuery = ref('')
+const sending = ref(false)
+const newChatLoading = ref(false)
 
-const tokenLimit = 100000
-const tokenUsed = 64000
-const tokenPercent = computed(() => Math.round((tokenUsed / tokenLimit) * 100))
+const tokenLimit = ref(100000)
+const tokenUsed = ref(0)
+const tokenPercent = computed(() => Math.round((tokenUsed.value / tokenLimit.value) * 100))
 
 const models = [
   { value: 'gpt4-omni', label: 'GPT-4 Omni' },
@@ -44,19 +51,25 @@ const models = [
   { value: 'deepseek-v4', label: 'DeepSeek-V4' },
 ]
 
-const agents = [
+const agents = ref([
   { value: 'data-analyst', label: 'Data Analyst Agent' },
   { value: 'copywriter', label: 'Copywriter Agent' },
   { value: 'coder', label: 'Code Assistant Agent' },
-]
+])
 
-const chats = [
-  { id: 1, title: 'Q4 数据分析报告撰写', icon: Document },
-  { id: 2, title: '品牌营销文案优化', icon: Promotion },
-  { id: 3, title: '产品需求文档梳理', icon: EditPen },
-  { id: 4, title: '用户反馈情绪分析', icon: ChatDotSquare },
-  { id: 5, title: '竞品市场调研总结', icon: Search },
-]
+interface ChatSummary {
+  id: number
+  title: string
+  icon: Component
+}
+
+const chats = ref<ChatSummary[]>([
+  { id: 1, title: 'Q4 数据分析报告撰写', icon: markRaw(Document) },
+  { id: 2, title: '品牌营销文案优化', icon: markRaw(Promotion) },
+  { id: 3, title: '产品需求文档梳理', icon: markRaw(EditPen) },
+  { id: 4, title: '用户反馈情绪分析', icon: markRaw(ChatDotSquare) },
+  { id: 5, title: '竞品市场调研总结', icon: markRaw(Search) },
+])
 
 interface Message {
   id: number
@@ -112,7 +125,18 @@ const messages = ref<Message[]>([
 
 const chatContainer = ref<HTMLElement>()
 
-const currentChat = computed(() => chats.find(c => c.id === selectedChatId.value))
+const currentChat = computed(() => chats.value.find(c => c.id === selectedChatId.value))
+const filteredAgents = computed(() => {
+  const keyword = agentSearchQuery.value.trim().toLowerCase()
+
+  if (!keyword) {
+    return agents.value
+  }
+
+  return agents.value.filter(
+    agent => agent.label.toLowerCase().includes(keyword) || agent.value.toLowerCase().includes(keyword)
+  )
+})
 const charCount = computed(() => inputText.value.length)
 const maxChars = 2000
 
@@ -152,9 +176,56 @@ function selectAgent(val: string) {
   showAgentDropdown.value = false
 }
 
-function sendMessage() {
+function updateTokenUsage(data: Awaited<ReturnType<typeof callAgent>>) {
+  const currentUsage = data.payload?.currentUsage
+
+  if (typeof currentUsage?.tokenLimit === 'number') {
+    tokenLimit.value = currentUsage.tokenLimit
+  }
+
+  if (typeof currentUsage?.tokenUsed === 'number') {
+    tokenUsed.value = currentUsage.tokenUsed
+  }
+}
+
+async function handleNewChat() {
+  if (newChatLoading.value) return
+
+  newChatLoading.value = true
+  try {
+    const data = await callAgent()
+    updateTokenUsage(data)
+
+    const id = Date.now()
+    chats.value.unshift({
+      id,
+      title: `新会话 ${chats.value.length + 1}`,
+      icon: markRaw(ChatDotSquare),
+    })
+    selectedChatId.value = id
+    messages.value = []
+    await router.replace({
+      path: '/chat',
+      query: {
+        chatId: String(id)
+      }
+    })
+    ElMessage.success(data.message || '新会话已创建')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '新建会话失败')
+  } finally {
+    newChatLoading.value = false
+  }
+}
+
+function handleCreateAgent() {
+  ElMessage.warning('后端暂未提供创建 Agent 接口')
+}
+
+async function sendMessage() {
   const text = inputText.value.trim()
-  if (!text) return
+  if (!text || sending.value) return
+
   messages.value.push({
     id: Date.now(),
     role: 'user',
@@ -167,12 +238,32 @@ function sendMessage() {
   })
   inputText.value = ''
   nextTick(scrollToBottom)
+
+  sending.value = true
+  try {
+    const data = await callAgent()
+    updateTokenUsage(data)
+    messages.value.push({
+      id: Date.now() + 1,
+      role: 'ai',
+      content: data.payload?.response || data.message || 'Agent 调用完成',
+      timestamp: new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      }),
+    })
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : 'Agent 调用失败')
+  } finally {
+    sending.value = false
+  }
 }
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
-    sendMessage()
+    void sendMessage()
   }
 }
 
@@ -182,7 +273,8 @@ function scrollToBottom() {
   }
 }
 
-function logout() {
+async function logout() {
+  await authStore.logout()
   router.push('/login')
 }
 
@@ -192,7 +284,7 @@ watch(
 )
 
 const modelLabel = computed(() => models.find(m => m.value === selectedModel.value)?.label ?? '')
-const agentLabel = computed(() => agents.find(a => a.value === selectedAgent.value)?.label ?? '')
+const agentLabel = computed(() => agents.value.find(a => a.value === selectedAgent.value)?.label ?? '')
 </script>
 
 <template>
@@ -226,9 +318,11 @@ const agentLabel = computed(() => agents.find(a => a.value === selectedAgent.val
       <div class="px-4 pt-4">
         <button
           class="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-[0.98]"
+          :disabled="newChatLoading"
+          @click="handleNewChat"
         >
           <el-icon :size="16"><ChatDotSquare /></el-icon>
-          + 开启新会话
+          {{ newChatLoading ? '创建中...' : '+ 开启新会话' }}
         </button>
       </div>
 
@@ -429,14 +523,31 @@ const agentLabel = computed(() => agents.find(a => a.value === selectedAgent.val
                 v-if="showAgentDropdown"
                 class="absolute bottom-full left-0 mb-1 w-48 rounded-lg border border-gray-200 bg-white py-1 shadow-lg z-10"
               >
+                <div class="px-2 pb-1">
+                  <el-input
+                    v-model="agentSearchQuery"
+                    :prefix-icon="Search"
+                    placeholder="搜索 Agent"
+                    size="small"
+                  />
+                </div>
                 <button
-                  v-for="a in agents"
+                  v-for="a in filteredAgents"
                   :key="a.value"
                   class="flex w-full items-center px-3 py-2 text-xs transition hover:bg-blue-50"
                   :class="selectedAgent === a.value ? 'text-blue-600 font-medium bg-blue-50' : 'text-gray-600'"
                   @click.stop="selectAgent(a.value)"
                 >
                   {{ a.label }}
+                </button>
+                <p v-if="filteredAgents.length === 0" class="px-3 py-2 text-xs text-gray-400">
+                  暂无该类型 Agent
+                </p>
+                <button
+                  class="mt-1 flex w-full items-center border-t border-gray-100 px-3 py-2 text-xs font-medium text-blue-600 transition hover:bg-blue-50"
+                  @click.stop="handleCreateAgent"
+                >
+                  创建 Agent
                 </button>
               </div>
             </div>
@@ -473,8 +584,8 @@ const agentLabel = computed(() => agents.find(a => a.value === selectedAgent.val
               </span>
               <button
                 class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white transition hover:bg-blue-700 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-                :disabled="!inputText.trim()"
-                @click="sendMessage"
+                :disabled="!inputText.trim() || sending"
+                @click="void sendMessage()"
               >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />

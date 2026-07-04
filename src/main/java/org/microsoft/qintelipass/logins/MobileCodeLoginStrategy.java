@@ -44,6 +44,10 @@ public class MobileCodeLoginStrategy implements ILoginStrategy {
         }
         
         User user = userService.getUserByPhone(phone);
+        if (user == null) {
+            return ResponseBody.builder().success(false).message("User not found.").build();
+        }
+
         if (user != null && UserStatus.DEACTIVATED.equals(user.getStatus())) {
             return ResponseBody.builder().success(false).message("Your account has been deactivated").build();
         }
@@ -52,7 +56,7 @@ public class MobileCodeLoginStrategy implements ILoginStrategy {
 
         if (targetSmsCode != null) {
             if (targetSmsCode.equals(smsCode)){
-                return ResponseBody.builder().success(true).message("Login Successful.").build();
+                return ResponseBody.builder().success(true).message("Login Successful.").payload(user).build();
             }
         }
         return ResponseBody.builder().success(false).message("Wrong smsCode.").build();

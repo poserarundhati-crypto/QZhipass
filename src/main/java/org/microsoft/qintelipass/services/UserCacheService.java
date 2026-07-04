@@ -35,6 +35,8 @@ public class UserCacheService {
             }
         } catch (JsonProcessingException e) {
             log.error("Failed to cache user: {}", user.getId(), e);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, skipping user cache: {}", e.getMessage());
         }
     }
 
@@ -43,7 +45,13 @@ public class UserCacheService {
             return null;
         }
         String userKey = USER_KEY_PREFIX + userId;
-        String userJson = redisTemplate.opsForValue().get(userKey);
+        String userJson;
+        try {
+            userJson = redisTemplate.opsForValue().get(userKey);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, skipping cached user lookup: {}", e.getMessage());
+            return null;
+        }
         if (userJson == null) {
             return null;
         }
@@ -61,7 +69,13 @@ public class UserCacheService {
             return null;
         }
         String phoneKey = PHONE_INDEX_PREFIX + phone;
-        String userIdStr = redisTemplate.opsForValue().get(phoneKey);
+        String userIdStr;
+        try {
+            userIdStr = redisTemplate.opsForValue().get(phoneKey);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, skipping cached phone lookup: {}", e.getMessage());
+            return null;
+        }
         if (userIdStr == null) {
             return null;
         }
@@ -69,7 +83,11 @@ public class UserCacheService {
             return getCachedUserById(Long.parseLong(userIdStr));
         } catch (NumberFormatException e) {
             log.error("Invalid user ID in cache for phone: {}", phone, e);
-            redisTemplate.delete(phoneKey);
+            try {
+                redisTemplate.delete(phoneKey);
+            } catch (RuntimeException redisException) {
+                log.warn("Redis unavailable, could not delete invalid phone cache: {}", redisException.getMessage());
+            }
             return null;
         }
     }
@@ -79,9 +97,13 @@ public class UserCacheService {
             return;
         }
         UserDTO cachedUser = getCachedUserById(userId);
-        if (cachedUser != null && cachedUser.getPhone() != null) {
-            redisTemplate.delete(PHONE_INDEX_PREFIX + cachedUser.getPhone());
+        try {
+            if (cachedUser != null && cachedUser.getPhone() != null) {
+                redisTemplate.delete(PHONE_INDEX_PREFIX + cachedUser.getPhone());
+            }
+            redisTemplate.delete(USER_KEY_PREFIX + userId);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, could not delete user cache: {}", e.getMessage());
         }
-        redisTemplate.delete(USER_KEY_PREFIX + userId);
     }
 }
