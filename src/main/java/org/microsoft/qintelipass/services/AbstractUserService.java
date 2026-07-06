@@ -67,6 +67,20 @@ public abstract class AbstractUserService implements UserService {
     }
 
     @Override
+    public User getUserByEmail(String email) {
+        if (email == null || email.trim().isEmpty()) {
+            return null;
+        }
+
+        log.debug("Fetching user by email: {}", email);
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isPresent()) {
+            return userOpt.get();
+        }
+        return null;
+    }
+
+    @Override
     public User getUserByWechatOpenId(String wechatOpenId) {
         return null;
     }

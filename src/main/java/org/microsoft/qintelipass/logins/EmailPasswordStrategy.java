@@ -10,29 +10,29 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Map;
 
-public class MobilePasswordStrategy implements ILoginStrategy {
+public class EmailPasswordStrategy implements ILoginStrategy {
     private final UserService userService;
     private final PasswordEncoder passwordEncoder;
 
-    public MobilePasswordStrategy(UserService userService, PasswordEncoder passwordEncoder) {
+    public EmailPasswordStrategy(UserService userService, PasswordEncoder passwordEncoder) {
         this.userService = userService;
         this.passwordEncoder = passwordEncoder;
     }
 
     @Override
     public String getType() {
-        return "MOBILE_PWD";
+        return "EMAIL_PWD";
     }
 
     @Override
     public ResponseBody<User> authenticate(Map<String, Object> params) {
-        String phone = (String) params.get("phone_number");
+        String email = (String) params.get("email");
         String password = (String) params.get("password");
 
-        if (phone == null || phone.isBlank() || password == null || password.isBlank()) {
+        if (email == null || email.isBlank() || password == null || password.isBlank()) {
             return ResponseBody.<User>builder()
                     .success(false)
-                    .message("Phone number and password should not be null.")
+                    .message("Email and password should not be null.")
                     .build();
         }
 
@@ -43,7 +43,7 @@ public class MobilePasswordStrategy implements ILoginStrategy {
                     .build();
         }
 
-        User user = userService.getUserByPhone(phone);
+        User user = userService.getUserByEmail(email);
         if (user == null) {
             return ResponseBody.<User>builder()
                     .success(false)

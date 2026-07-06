@@ -494,16 +494,18 @@
 
           <div class="message" id="messageBox" role="status" aria-live="polite"></div>
           <button class="wechat-button" id="wechatButton" type="button">微信登录</button>
-          <p class="demo-note">演示账号：手机号 13800138000，密码 123456。验证码登录的 mock 验证码为 123456。</p>
+          <p class="demo-note">演示账号：手机号 13800138000，密码 12345@Abc。验证码登录的 mock 验证码为 123456。</p>
         </div>
       </section>
     </main>
 
     <script>
       const MOCK_MOBILE = "13800138000";
-      const MOCK_PASSWORD = "123456";
+      const MOCK_PASSWORD = "12345@Abc";
       const MOCK_EMAIL = "demo@qzhipass.com";
       const MOCK_CODE = "123456";
+      const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+      const PASSWORD_REQUIREMENT_MESSAGE = "密码不符合要求：必须至少8位，并包含大写字母、小写字母、数字和特殊字符";
 
       const tabs = Array.from(document.querySelectorAll(".tab-button"));
       const panes = Array.from(document.querySelectorAll(".form-pane"));
@@ -547,10 +549,28 @@
       }
 
       function updateButtons() {
-        phoneLoginButton.disabled = !phoneMobile.value.trim() || !phonePassword.value;
-        emailLoginButton.disabled = !emailAccount.value.trim() || !emailPassword.value;
+        phoneLoginButton.disabled = !phoneMobile.value.trim() || !PASSWORD_PATTERN.test(phonePassword.value);
+        emailLoginButton.disabled = !emailAccount.value.trim() || !PASSWORD_PATTERN.test(emailPassword.value);
         sendSmsButton.disabled = !smsMobile.value.trim() || countdown > 0;
         smsLoginButton.disabled = !smsMobile.value.trim() || !smsCode.value.trim();
+      }
+
+      function validatePassword(password) {
+        if (PASSWORD_PATTERN.test(password)) {
+          return true;
+        }
+
+        showMessage(PASSWORD_REQUIREMENT_MESSAGE, "error");
+        return false;
+      }
+
+      function handlePasswordInput(password) {
+        if (!password || PASSWORD_PATTERN.test(password)) {
+          clearMessage();
+          return;
+        }
+
+        showMessage(PASSWORD_REQUIREMENT_MESSAGE, "error");
       }
 
       function completeDemoLogin() {
@@ -563,7 +583,11 @@
 
       [phoneMobile, phonePassword, emailAccount, emailPassword, smsMobile, smsCode].forEach(input => {
         input.addEventListener("input", () => {
-          clearMessage();
+          if (input === phonePassword || input === emailPassword) {
+            handlePasswordInput(input.value);
+          } else {
+            clearMessage();
+          }
           updateButtons();
         });
       });
@@ -572,6 +596,10 @@
         event.preventDefault();
         const mobile = phoneMobile.value.trim();
         const password = phonePassword.value;
+
+        if (!validatePassword(password)) {
+          return;
+        }
 
         if (mobile !== MOCK_MOBILE) {
           showMessage("用户不存在", "error");
@@ -588,6 +616,10 @@
 
       document.getElementById("emailForm").addEventListener("submit", event => {
         event.preventDefault();
+
+        if (!validatePassword(emailPassword.value)) {
+          return;
+        }
 
         if (emailAccount.value.trim() !== MOCK_EMAIL || emailPassword.value !== MOCK_PASSWORD) {
           showMessage("邮箱或密码错误", "error");

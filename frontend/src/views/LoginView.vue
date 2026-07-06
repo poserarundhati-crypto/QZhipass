@@ -8,10 +8,12 @@ const DEMO_MODE = true
 const LOGIN_API = '/api/v1/auth/portal/login'
 const SEND_CODE_API = '/api/v1/auth/portal/sendcode'
 const MOCK_MOBILE = '13800138000'
-const MOCK_PASSWORD = '123456'
+const MOCK_PASSWORD = '12345@Abc'
 const MOCK_EMAIL = 'demo@qzhipass.com'
 const MOCK_SMS_CODE = '123456'
 const INDEX_ROUTE = '/index'
+const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/
+const PASSWORD_REQUIREMENT_MESSAGE = '密码不符合要求：必须至少8位，并包含大写字母、小写字母、数字和特殊字符'
 
 const router = useRouter()
 
@@ -42,9 +44,11 @@ const normalizedPhoneMobile = computed(() => phoneForm.mobile.trim())
 const normalizedEmail = computed(() => emailForm.email.trim())
 const normalizedSmsMobile = computed(() => smsForm.mobile.trim())
 const canSubmitPhone = computed(
-  () => normalizedPhoneMobile.value.length > 0 && phoneForm.password.length > 0 && !submitting.value
+  () => normalizedPhoneMobile.value.length > 0 && PASSWORD_PATTERN.test(phoneForm.password) && !submitting.value
 )
-const canSubmitEmail = computed(() => normalizedEmail.value.length > 0 && emailForm.password.length > 0 && !submitting.value)
+const canSubmitEmail = computed(
+  () => normalizedEmail.value.length > 0 && PASSWORD_PATTERN.test(emailForm.password) && !submitting.value
+)
 const canSendSms = computed(() => normalizedSmsMobile.value.length > 0 && countdown.value === 0 && !smsSending.value)
 const canSubmitSms = computed(
   () => normalizedSmsMobile.value.length > 0 && smsForm.code.trim().length > 0 && !submitting.value
@@ -63,6 +67,24 @@ function clearMessage() {
 function showMessage(text: string, type: 'error' | 'success') {
   messageText.value = text
   messageType.value = type
+}
+
+function validatePassword(password: string) {
+  if (PASSWORD_PATTERN.test(password)) {
+    return true
+  }
+
+  showMessage(PASSWORD_REQUIREMENT_MESSAGE, 'error')
+  return false
+}
+
+function handlePasswordInput(password: string) {
+  if (!password || PASSWORD_PATTERN.test(password)) {
+    clearMessage()
+    return
+  }
+
+  showMessage(PASSWORD_REQUIREMENT_MESSAGE, 'error')
 }
 
 function saveMockSession() {
@@ -111,7 +133,11 @@ async function requestRealSmsCode(mobile: string) {
 }
 
 async function handlePhoneLogin() {
-  if (!canSubmitPhone.value) {
+  if (submitting.value || normalizedPhoneMobile.value.length === 0) {
+    return
+  }
+
+  if (!validatePassword(phoneForm.password)) {
     return
   }
 
@@ -148,7 +174,11 @@ async function handlePhoneLogin() {
 }
 
 async function handleEmailLogin() {
-  if (!canSubmitEmail.value) {
+  if (submitting.value || normalizedEmail.value.length === 0) {
+    return
+  }
+
+  if (!validatePassword(emailForm.password)) {
     return
   }
 
@@ -324,7 +354,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="clearMessage"
+              @input="handlePasswordInput(phoneForm.password)"
             />
           </label>
 
@@ -352,7 +382,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="clearMessage"
+              @input="handlePasswordInput(emailForm.password)"
             />
           </label>
 
@@ -399,7 +429,7 @@ onBeforeUnmount(() => {
         <p v-if="messageText" :class="['message', messageType]" role="status" aria-live="polite">{{ messageText }}</p>
 
         <button class="wechat-button" type="button" @click="handleWechatLogin">微信登录</button>
-        <p class="demo-note">演示账号：手机号 13800138000，密码 123456。验证码登录的 mock 验证码为 123456。</p>
+        <p class="demo-note">演示账号：手机号 13800138000，密码 12345@Abc。验证码登录的 mock 验证码为 123456。</p>
       </div>
     </section>
   </main>
