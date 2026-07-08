@@ -1,8 +1,16 @@
 import axios from 'axios'
 import { clearLoginInfo, readLoginInfo } from './session'
 
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipAuthRedirect?: boolean
+  }
+}
+
+const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+
 const http = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:7510',
+  baseURL: apiBaseURL,
   timeout: 10000,
   withCredentials: true
 })
@@ -36,6 +44,10 @@ export function getErrorMessage(error: unknown, fallback: string) {
 }
 
 http.interceptors.request.use(config => {
+  if (apiBaseURL.replace(/\/+$/, '').endsWith('/api') && config.url?.startsWith('/api/')) {
+    config.url = config.url.slice('/api'.length)
+  }
+
   const accessToken = readLoginInfo()?.accessToken
 
   if (accessToken && !config.headers.Authorization) {
@@ -48,7 +60,11 @@ http.interceptors.request.use(config => {
 http.interceptors.response.use(
   response => response,
   error => {
-    if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
+    if (
+      axios.isAxiosError(error) &&
+      !error.config?.skipAuthRedirect &&
+      (error.response?.status === 401 || error.response?.status === 403)
+    ) {
       clearLoginInfo()
 
       if (window.location.pathname !== '/login') {

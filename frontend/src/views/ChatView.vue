@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   Bell,
@@ -21,10 +21,12 @@ import {
   UserFilled,
 } from '@element-plus/icons-vue'
 import { callAgent } from '../api/agent'
+import { createSession } from '../api/conversation'
 import BrandLogo from '../components/BrandLogo.vue'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 // ========== state ==========
@@ -32,7 +34,7 @@ const searchQuery = ref('')
 const inputText = ref('')
 const selectedModel = ref('gpt4-omni')
 const selectedAgent = ref('data-analyst')
-const selectedChatId = ref(1)
+const selectedChatId = ref('1')
 const showModelDropdown = ref(false)
 const showAgentDropdown = ref(false)
 const agentSearchQuery = ref('')
@@ -58,17 +60,17 @@ const agents = ref([
 ])
 
 interface ChatSummary {
-  id: number
+  id: string
   title: string
   icon: Component
 }
 
 const chats = ref<ChatSummary[]>([
-  { id: 1, title: 'Q4 数据分析报告撰写', icon: markRaw(Document) },
-  { id: 2, title: '品牌营销文案优化', icon: markRaw(Promotion) },
-  { id: 3, title: '产品需求文档梳理', icon: markRaw(EditPen) },
-  { id: 4, title: '用户反馈情绪分析', icon: markRaw(ChatDotSquare) },
-  { id: 5, title: '竞品市场调研总结', icon: markRaw(Search) },
+  { id: '1', title: 'Q4 数据分析报告撰写', icon: markRaw(Document) },
+  { id: '2', title: '品牌营销文案优化', icon: markRaw(Promotion) },
+  { id: '3', title: '产品需求文档梳理', icon: markRaw(EditPen) },
+  { id: '4', title: '用户反馈情绪分析', icon: markRaw(ChatDotSquare) },
+  { id: '5', title: '竞品市场调研总结', icon: markRaw(Search) },
 ])
 
 interface Message {
@@ -140,8 +142,44 @@ const filteredAgents = computed(() => {
 const charCount = computed(() => inputText.value.length)
 const maxChars = 2000
 
-function selectChat(id: number) {
+function selectChat(id: string) {
   selectedChatId.value = id
+}
+
+function getRouteSessionId() {
+  const paramId = route.params.sessionId
+  const queryId = route.query.sessionId || route.query.chatId
+
+  if (typeof paramId === 'string' && paramId.trim()) {
+    return paramId.trim()
+  }
+
+  if (typeof queryId === 'string' && queryId.trim()) {
+    return queryId.trim()
+  }
+
+  return ''
+}
+
+function openBlankSession(sessionId: string) {
+  if (!chats.value.some(chat => chat.id === sessionId)) {
+    chats.value.unshift({
+      id: sessionId,
+      title: `新会话 ${sessionId}`,
+      icon: markRaw(ChatDotSquare),
+    })
+  }
+
+  selectedChatId.value = sessionId
+  messages.value = []
+}
+
+function syncRouteSession() {
+  const sessionId = getRouteSessionId()
+
+  if (sessionId) {
+    openBlankSession(sessionId)
+  }
 }
 
 function selectModel(val: string) {
@@ -165,6 +203,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  syncRouteSession()
 })
 
 onBeforeUnmount(() => {
@@ -193,24 +232,16 @@ async function handleNewChat() {
 
   newChatLoading.value = true
   try {
-    const data = await callAgent()
-    updateTokenUsage(data)
+    const { sessionId } = await createSession()
 
-    const id = Date.now()
-    chats.value.unshift({
-      id,
-      title: `新会话 ${chats.value.length + 1}`,
-      icon: markRaw(ChatDotSquare),
-    })
-    selectedChatId.value = id
-    messages.value = []
-    await router.replace({
-      path: '/chat',
-      query: {
-        chatId: String(id)
+    openBlankSession(sessionId)
+    await router.push({
+      name: 'chat-session',
+      params: {
+        sessionId
       }
     })
-    ElMessage.success(data.message || '新会话已创建')
+    ElMessage.success('新建对话成功')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '新建会话失败')
   } finally {
@@ -283,6 +314,11 @@ watch(
   () => nextTick(scrollToBottom),
 )
 
+watch(
+  () => [route.params.sessionId, route.query.sessionId, route.query.chatId],
+  () => syncRouteSession(),
+)
+
 const modelLabel = computed(() => models.find(m => m.value === selectedModel.value)?.label ?? '')
 const agentLabel = computed(() => agents.value.find(a => a.value === selectedAgent.value)?.label ?? '')
 </script>
@@ -322,7 +358,7 @@ const agentLabel = computed(() => agents.value.find(a => a.value === selectedAge
           @click="handleNewChat"
         >
           <el-icon :size="16"><ChatDotSquare /></el-icon>
-          {{ newChatLoading ? '创建中...' : '+ 开启新会话' }}
+          {{ newChatLoading ? '创建中...' : '新建对话' }}
         </button>
       </div>
 

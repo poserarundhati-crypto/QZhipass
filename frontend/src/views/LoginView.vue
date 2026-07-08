@@ -1,21 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { isValidMobile, sendSmsCode } from '../api/auth'
+import { useAuthStore } from '../stores/auth'
 
 type LoginTab = 'phone' | 'email' | 'sms'
 
-const DEMO_MODE = true
-const LOGIN_API = '/api/v1/auth/portal/login'
-const SEND_CODE_API = '/api/v1/auth/portal/sendcode'
-const MOCK_MOBILE = '13800138000'
-const MOCK_PASSWORD = '12345@Abc'
-const MOCK_EMAIL = 'demo@qzhipass.com'
-const MOCK_SMS_CODE = '123456'
 const INDEX_ROUTE = '/index'
 const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/
 const PASSWORD_REQUIREMENT_MESSAGE = '密码不符合要求：必须至少8位，并包含大写字母、小写字母、数字和特殊字符'
 
 const router = useRouter()
+const route = useRoute()
+const authStore = useAuthStore()
 
 const activeTab = ref<LoginTab>('phone')
 const submitting = ref(false)
@@ -40,6 +37,19 @@ const smsForm = reactive({
   code: ''
 })
 
+function ensureLoginFavicon() {
+  if (typeof document === 'undefined' || document.querySelector('link[rel~="icon"]')) {
+    return
+  }
+
+  const link = document.createElement('link')
+  link.rel = 'icon'
+  link.href = 'data:,'
+  document.head.appendChild(link)
+}
+
+ensureLoginFavicon()
+
 const normalizedPhoneMobile = computed(() => phoneForm.mobile.trim())
 const normalizedEmail = computed(() => emailForm.email.trim())
 const normalizedSmsMobile = computed(() => smsForm.mobile.trim())
@@ -49,9 +59,14 @@ const canSubmitPhone = computed(
 const canSubmitEmail = computed(
   () => normalizedEmail.value.length > 0 && PASSWORD_PATTERN.test(emailForm.password) && !submitting.value
 )
-const canSendSms = computed(() => normalizedSmsMobile.value.length > 0 && countdown.value === 0 && !smsSending.value)
+const hasInvalidSmsMobile = computed(
+  () => normalizedSmsMobile.value.length > 0 && !isValidMobile(normalizedSmsMobile.value)
+)
+const canSendSms = computed(
+  () => isValidMobile(normalizedSmsMobile.value) && countdown.value === 0 && !smsSending.value
+)
 const canSubmitSms = computed(
-  () => normalizedSmsMobile.value.length > 0 && smsForm.code.trim().length > 0 && !submitting.value
+  () => isValidMobile(normalizedSmsMobile.value) && smsForm.code.trim().length > 0 && !submitting.value
 )
 const smsButtonText = computed(() => (countdown.value > 0 ? `${countdown.value} 秒后重试` : '发送验证码'))
 
@@ -87,53 +102,41 @@ function handlePasswordInput(password: string) {
   showMessage(PASSWORD_REQUIREMENT_MESSAGE, 'error')
 }
 
-function saveMockSession() {
-  window.localStorage.setItem('user_id', '10001')
-  window.localStorage.setItem('access_token', 'mock-access-token')
+function handlePasswordInputEvent(event: Event) {
+  const password = event.target instanceof HTMLInputElement ? event.target.value : ''
+  handlePasswordInput(password)
+}
+
+function handleSmsMobileInputEvent(event: Event) {
+  const mobile = event.target instanceof HTMLInputElement ? event.target.value.trim() : ''
+
+  if (!mobile) {
+    clearMessage()
+    return
+  }
+
+  if (!isValidMobile(mobile)) {
+    showMessage('请输入正确的手机号', 'error')
+    return
+  }
+
+  clearMessage()
 }
 
 async function redirectAfterLogin() {
+  const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : INDEX_ROUTE
+  const target = redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : INDEX_ROUTE
+
   showMessage('登录成功', 'success')
-  await router.push(INDEX_ROUTE)
+  await router.push(target)
 }
 
-async function requestRealLogin(loginType: string, params: Record<string, string>) {
-  const response = await window.fetch(LOGIN_API, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      loginType,
-      params
-    })
-  })
-
-  if (!response.ok) {
-    throw new Error('真实登录接口暂不可用')
-  }
-
-  return response.json()
-}
-
-async function requestRealSmsCode(mobile: string) {
-  const response = await window.fetch(SEND_CODE_API, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      phone: mobile
-    })
-  })
-
-  if (!response.ok) {
-    throw new Error('真实验证码接口暂不可用')
-  }
+function getErrorText(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback
 }
 
 async function handlePhoneLogin() {
-  if (submitting.value || normalizedPhoneMobile.value.length === 0) {
+  if (!canSubmitPhone.value) {
     return
   }
 
@@ -145,36 +148,17 @@ async function handlePhoneLogin() {
   clearMessage()
 
   try {
-    if (DEMO_MODE) {
-      if (normalizedPhoneMobile.value !== MOCK_MOBILE) {
-        showMessage('用户不存在', 'error')
-        return
-      }
-
-      if (phoneForm.password !== MOCK_PASSWORD) {
-        showMessage('账号或密码错误', 'error')
-        return
-      }
-
-      saveMockSession()
-      await redirectAfterLogin()
-      return
-    }
-
-    await requestRealLogin('MOBILE_PWD', {
-      phone_number: normalizedPhoneMobile.value,
-      password: phoneForm.password
-    })
+    await authStore.passwordLogin(normalizedPhoneMobile.value, phoneForm.password)
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(error instanceof Error ? error.message : '账号或密码错误', 'error')
+    showMessage(getErrorText(error, '账号或密码错误'), 'error')
   } finally {
     submitting.value = false
   }
 }
 
 async function handleEmailLogin() {
-  if (submitting.value || normalizedEmail.value.length === 0) {
+  if (!canSubmitEmail.value) {
     return
   }
 
@@ -186,24 +170,10 @@ async function handleEmailLogin() {
   clearMessage()
 
   try {
-    if (DEMO_MODE) {
-      if (normalizedEmail.value !== MOCK_EMAIL || emailForm.password !== MOCK_PASSWORD) {
-        showMessage('邮箱或密码错误', 'error')
-        return
-      }
-
-      saveMockSession()
-      await redirectAfterLogin()
-      return
-    }
-
-    await requestRealLogin('EMAIL_PWD', {
-      email: normalizedEmail.value,
-      password: emailForm.password
-    })
+    await authStore.emailPasswordLogin(normalizedEmail.value, emailForm.password)
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(error instanceof Error ? error.message : '邮箱或密码错误', 'error')
+    showMessage(getErrorText(error, '账号或密码错误'), 'error')
   } finally {
     submitting.value = false
   }
@@ -228,6 +198,9 @@ function startCountdown() {
 
 async function handleSendSmsCode() {
   if (!canSendSms.value) {
+    if (!isValidMobile(normalizedSmsMobile.value)) {
+      showMessage('请输入正确的手机号', 'error')
+    }
     return
   }
 
@@ -235,14 +208,11 @@ async function handleSendSmsCode() {
   clearMessage()
 
   try {
-    if (!DEMO_MODE) {
-      await requestRealSmsCode(normalizedSmsMobile.value)
-    }
-
+    await sendSmsCode(normalizedSmsMobile.value)
     startCountdown()
     showMessage('验证码已发送', 'success')
   } catch (error) {
-    showMessage(error instanceof Error ? error.message : '验证码发送失败', 'error')
+    showMessage(getErrorText(error, '验证码发送失败'), 'error')
   } finally {
     smsSending.value = false
   }
@@ -257,31 +227,13 @@ async function handleSmsLogin() {
   clearMessage()
 
   try {
-    if (DEMO_MODE) {
-      if (smsForm.code.trim() !== MOCK_SMS_CODE) {
-        showMessage('验证码错误或已过期', 'error')
-        return
-      }
-
-      saveMockSession()
-      await redirectAfterLogin()
-      return
-    }
-
-    await requestRealLogin('smsLogin', {
-      phone_number: normalizedSmsMobile.value,
-      sms: smsForm.code.trim()
-    })
+    await authStore.smsLogin(normalizedSmsMobile.value, smsForm.code.trim())
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(error instanceof Error ? error.message : '验证码错误或已过期', 'error')
+    showMessage(getErrorText(error, '验证码登录失败'), 'error')
   } finally {
     submitting.value = false
   }
-}
-
-function handleWechatLogin() {
-  window.alert('微信登录暂未接入，可后续对接后端授权码接口')
 }
 
 onBeforeUnmount(() => {
@@ -294,43 +246,43 @@ onBeforeUnmount(() => {
 <template>
   <main class="login-page">
     <section class="brand-panel" aria-label="企智通品牌展示">
-      <div class="brand-frame">
-        <div class="brand-logo brand-logo--light">
-          <span class="brand-mark">Q</span>
-          <span>企智通</span>
+      <div class="brand-content">
+        <div class="brand-emblem" aria-hidden="true">Q</div>
+        <h1>企智通</h1>
+        <p class="brand-subtitle">企业智能 AI 中枢</p>
+        <p class="brand-slogan">让 AI 在企业内部安全创造价值</p>
+
+        <div class="brand-tags" aria-label="产品能力">
+          <span>统一认证</span>
+          <span>模型可控</span>
+          <span>数据不出</span>
+          <span>高效协作</span>
         </div>
-        <p class="brand-kicker">QZhipass</p>
-        <h1>企业智能通行入口</h1>
-        <p class="brand-description">连接企业账号与智能工作台，登录后进入企智通系统首页。</p>
-        <div class="signal-strip" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
+
+        <p class="brand-footer">员工能用 AI · 企业能管 AI · 数据不出企业</p>
       </div>
     </section>
 
     <section class="login-side" aria-label="登录区域">
       <div class="login-panel" data-testid="login-card">
-        <div class="brand-logo">
-          <span class="brand-mark">Q</span>
-          <span>企智通</span>
-        </div>
-
         <header class="login-header">
+          <div class="login-brand">
+            <span class="login-brand-mark" aria-hidden="true">Q</span>
+            <span>企智通</span>
+          </div>
           <h2>登录企智通</h2>
-          <p>使用手机号、邮箱或验证码进入企业智能通行入口。</p>
+          <p>选择企业账号登录方式。</p>
         </header>
 
         <div class="tabs" role="tablist" aria-label="登录方式">
-          <button type="button" :class="{ active: activeTab === 'phone' }" @click="setActiveTab('phone')">
-            手机号密码登录
+          <button type="button" :class="{ active: activeTab === 'phone' }" :disabled="submitting" @click="setActiveTab('phone')">
+            手机号密码
           </button>
-          <button type="button" :class="{ active: activeTab === 'email' }" @click="setActiveTab('email')">
-            邮箱密码登录
+          <button type="button" :class="{ active: activeTab === 'sms' }" :disabled="submitting" @click="setActiveTab('sms')">
+            手机验证码
           </button>
-          <button type="button" :class="{ active: activeTab === 'sms' }" @click="setActiveTab('sms')">
-            验证码登录
+          <button type="button" :class="{ active: activeTab === 'email' }" :disabled="submitting" @click="setActiveTab('email')">
+            邮箱密码
           </button>
         </div>
 
@@ -354,7 +306,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="handlePasswordInput(phoneForm.password)"
+              @input="handlePasswordInputEvent"
             />
           </label>
 
@@ -382,7 +334,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="handlePasswordInput(emailForm.password)"
+              @input="handlePasswordInputEvent"
             />
           </label>
 
@@ -400,8 +352,9 @@ onBeforeUnmount(() => {
               maxlength="11"
               placeholder="请输入手机号"
               type="tel"
-              @input="clearMessage"
+              @input="handleSmsMobileInputEvent"
             />
+            <small v-if="hasInvalidSmsMobile" class="field-hint">请输入正确的手机号</small>
           </label>
 
           <label class="field">
@@ -427,9 +380,6 @@ onBeforeUnmount(() => {
         </form>
 
         <p v-if="messageText" :class="['message', messageType]" role="status" aria-live="polite">{{ messageText }}</p>
-
-        <button class="wechat-button" type="button" @click="handleWechatLogin">微信登录</button>
-        <p class="demo-note">演示账号：手机号 13800138000，密码 12345@Abc。验证码登录的 mock 验证码为 123456。</p>
       </div>
     </section>
   </main>
@@ -439,23 +389,26 @@ onBeforeUnmount(() => {
 .login-page {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.04fr) minmax(390px, 0.96fr);
   overflow-x: hidden;
-  color: #17233c;
-  background: #f7f9fc;
+  color: #0f172a;
+  background: #f8fafc;
 }
 
 .brand-panel {
   position: relative;
   min-height: 100vh;
   display: grid;
-  place-items: center;
-  padding: clamp(36px, 6vw, 88px);
+  align-items: center;
+  padding: clamp(40px, 7vw, 96px);
   overflow: hidden;
   color: #ffffff;
   background:
-    radial-gradient(circle at 72% 18%, rgba(35, 211, 255, 0.28), transparent 28%),
-    linear-gradient(145deg, #0036bd 0%, #002fa7 44%, #021b63 100%);
+    radial-gradient(circle at 18% 18%, rgba(56, 189, 248, 0.34), transparent 28%),
+    radial-gradient(circle at 86% 72%, rgba(6, 182, 212, 0.2), transparent 30%),
+    linear-gradient(150deg, #1e3a8a 0%, #2563eb 48%, #0f172a 100%);
+  background-size: 120% 120%, 120% 120%, 100% 100%;
+  animation: brand-glow 11s ease-in-out infinite alternate;
 }
 
 .brand-panel::before {
@@ -463,115 +416,129 @@ onBeforeUnmount(() => {
   inset: 0;
   content: "";
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.14) 1px, transparent 1px),
-    linear-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px);
-  background-size: 48px 48px;
-  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.24));
+    linear-gradient(90deg, rgba(248, 250, 252, 0.13) 1px, transparent 1px),
+    linear-gradient(rgba(248, 250, 252, 0.1) 1px, transparent 1px);
+  background-position: 0 0;
+  background-size: 58px 58px;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0.2));
+  animation: grid-drift 18s linear infinite;
 }
 
-.brand-frame {
+.brand-panel::after {
+  position: absolute;
+  right: -20vw;
+  bottom: 11vh;
+  width: 68vw;
+  height: 190px;
+  content: "";
+  border-top: 1px solid rgba(186, 230, 253, 0.42);
+  border-bottom: 1px solid rgba(186, 230, 253, 0.2);
+  background: linear-gradient(90deg, transparent, rgba(224, 242, 254, 0.18), transparent);
+  transform: rotate(-16deg);
+  animation: light-sweep 7s ease-in-out infinite alternate;
+}
+
+.brand-content {
   position: relative;
   z-index: 1;
   width: min(100%, 620px);
-  min-height: min(70vh, 760px);
-  display: grid;
-  align-content: center;
-  padding: clamp(30px, 5vw, 54px);
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0)),
-    rgba(2, 26, 91, 0.08);
 }
 
-.brand-frame::after {
+.brand-content::before,
+.brand-content::after {
   position: absolute;
-  right: clamp(18px, 4vw, 46px);
-  bottom: clamp(18px, 4vw, 46px);
-  width: clamp(130px, 18vw, 230px);
-  height: clamp(88px, 12vw, 140px);
   content: "";
-  border: 1px solid rgba(115, 221, 255, 0.36);
+  pointer-events: none;
+}
+
+.brand-content::before {
+  right: 6%;
+  top: -12%;
+  width: 150px;
+  height: 150px;
+  border: 1px solid rgba(224, 242, 254, 0.3);
   border-radius: 8px;
-  background:
-    linear-gradient(90deg, rgba(115, 221, 255, 0.3) 1px, transparent 1px),
-    linear-gradient(rgba(115, 221, 255, 0.24) 1px, transparent 1px);
-  background-size: 24px 24px;
+  transform: rotate(12deg);
+  animation: float-panel 8s ease-in-out infinite alternate;
 }
 
-.brand-logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  color: #14233d;
-  font-size: 18px;
-  font-weight: 850;
+.brand-content::after {
+  left: 42%;
+  bottom: -16%;
+  width: 240px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(224, 242, 254, 0.72), transparent);
+  animation: scan-line 5s ease-in-out infinite;
 }
 
-.brand-logo--light {
-  gap: 12px;
-  margin-bottom: 44px;
-  color: #ffffff;
-  font-size: 28px;
-}
-
-.brand-mark {
-  width: 34px;
-  height: 34px;
+.brand-emblem {
+  width: 54px;
+  height: 54px;
   display: grid;
   place-items: center;
-  border: 1px solid #c6d4e7;
+  margin-bottom: 34px;
+  border: 1px solid rgba(248, 250, 252, 0.5);
   border-radius: 8px;
-  color: #002fa7;
-  background: #ffffff;
-  font-size: 18px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.18);
+  font-size: 28px;
   font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  animation: emblem-glow 4s ease-in-out infinite alternate;
 }
 
-.brand-logo--light .brand-mark {
-  width: 48px;
-  height: 48px;
-  border-color: rgba(255, 255, 255, 0.46);
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
-  font-size: 25px;
-}
-
-.brand-kicker {
-  margin: 0 0 14px;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 14px;
-  font-weight: 850;
-}
-
-.brand-panel h1 {
-  max-width: 560px;
+.brand-content h1 {
   margin: 0;
-  font-size: clamp(44px, 6vw, 78px);
-  line-height: 1.02;
+  font-size: clamp(54px, 7vw, 92px);
+  line-height: 1;
   letter-spacing: 0;
 }
 
-.brand-description {
-  max-width: 540px;
-  margin: 24px 0 0;
-  color: rgba(255, 255, 255, 0.86);
-  font-size: 17px;
-  line-height: 1.75;
+.brand-subtitle {
+  margin: 16px 0 0;
+  color: #dbeafe;
+  font-size: clamp(20px, 2vw, 28px);
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
-.signal-strip {
-  width: min(100%, 420px);
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+.brand-slogan {
+  max-width: 560px;
+  margin: 22px 0 0;
+  color: rgba(248, 250, 252, 0.96);
+  font-size: clamp(24px, 3vw, 40px);
+  font-weight: 850;
+  line-height: 1.24;
+}
+
+.brand-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-top: 34px;
 }
 
-.signal-strip span {
-  min-height: 6px;
-  border-radius: 6px;
-  background: linear-gradient(90deg, rgba(115, 221, 255, 0.92), rgba(255, 255, 255, 0.2));
+.brand-tags span {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16px;
+  border: 1px solid rgba(224, 242, 254, 0.46);
+  border-radius: 8px;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.18);
+  font-size: 15px;
+  font-weight: 800;
+  white-space: nowrap;
+  backdrop-filter: blur(10px);
+}
+
+.brand-footer {
+  margin: 44px 0 0;
+  color: rgba(248, 250, 252, 0.88);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.6;
 }
 
 .login-side {
@@ -579,29 +546,51 @@ onBeforeUnmount(() => {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: clamp(32px, 6vw, 76px);
+  padding: clamp(28px, 6vw, 76px);
 }
 
 .login-panel {
-  width: min(100%, 430px);
+  width: min(100%, 460px);
   min-width: 0;
+  padding: clamp(28px, 4vw, 40px);
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 22px 54px rgba(15, 23, 42, 0.1);
 }
 
-.login-header {
-  margin: 28px 0 0;
+.login-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #0f172a;
+  font-size: 18px;
+  font-weight: 850;
+}
+
+.login-brand-mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #ffffff;
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  font-size: 18px;
+  font-weight: 900;
 }
 
 .login-header h2 {
-  margin: 0 0 8px;
-  color: #0f2345;
-  font-size: 36px;
-  line-height: 1.12;
+  margin: 28px 0 8px;
+  color: #0f172a;
+  font-size: 34px;
+  line-height: 1.14;
   letter-spacing: 0;
 }
 
 .login-header p {
   margin: 0;
-  color: #60708a;
+  color: #64748b;
   font-size: 15px;
   line-height: 1.7;
 }
@@ -610,11 +599,11 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
-  margin: 30px 0 26px;
+  margin: 28px 0 24px;
   padding: 4px;
-  border: 1px solid #d8e2ee;
+  border: 1px solid #dbe3ee;
   border-radius: 8px;
-  background: #edf3fb;
+  background: #f1f5f9;
 }
 
 .tabs button {
@@ -622,18 +611,23 @@ onBeforeUnmount(() => {
   min-height: 42px;
   border: 0;
   border-radius: 6px;
-  color: #526176;
+  color: #64748b;
   background: transparent;
   font: inherit;
   font-size: 14px;
-  font-weight: 780;
+  font-weight: 800;
   cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
 .tabs button.active {
-  color: #002fa7;
+  color: #2563eb;
   background: #ffffff;
-  box-shadow: 0 0 0 1px rgba(0, 47, 167, 0.12);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.tabs button:disabled {
+  cursor: not-allowed;
 }
 
 .login-form {
@@ -649,7 +643,7 @@ onBeforeUnmount(() => {
 }
 
 .field span {
-  color: #233149;
+  color: #0f172a;
   font-size: 14px;
   font-weight: 780;
 }
@@ -658,17 +652,28 @@ onBeforeUnmount(() => {
   width: 100%;
   min-height: 52px;
   padding: 0 14px;
-  border: 1px solid #d6e0ee;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
   outline: none;
-  color: #16233c;
+  color: #0f172a;
   background: #ffffff;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
+.field input::placeholder {
+  color: #94a3b8;
+}
+
 .field input:focus {
-  border-color: #002fa7;
-  box-shadow: 0 0 0 3px rgba(0, 47, 167, 0.1);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.field-hint {
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
 }
 
 .sms-row {
@@ -678,48 +683,57 @@ onBeforeUnmount(() => {
 }
 
 .primary-button,
-.secondary-button,
-.wechat-button {
+.secondary-button {
   width: 100%;
   min-height: 52px;
   border-radius: 8px;
   font-size: 15px;
   font-weight: 850;
+  opacity: 1;
 }
 
 .primary-button {
   margin-top: 4px;
   border: 0;
   color: #ffffff;
-  background: linear-gradient(135deg, #002fa7, #2265e8);
-  box-shadow: 0 18px 32px rgba(0, 47, 167, 0.22);
+  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  box-shadow: 0 18px 30px rgba(37, 99, 235, 0.24);
+  cursor: pointer;
+  transition: background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.primary-button:not(:disabled):hover {
+  background: linear-gradient(135deg, #1d4ed8, #0891b2);
+  box-shadow: 0 20px 34px rgba(37, 99, 235, 0.28);
+  transform: translateY(-1px);
 }
 
 .primary-button:disabled {
-  color: rgba(255, 255, 255, 0.72);
-  background: #8da3d7;
+  color: #64748b;
+  background: #cbd5e1;
   box-shadow: none;
   cursor: not-allowed;
+  opacity: 1;
+  transform: none;
 }
 
 .secondary-button {
-  border: 1px solid #b9cdf0;
-  color: #002fa7;
-  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  color: #2563eb;
+  background: #eff6ff;
+  cursor: pointer;
+}
+
+.secondary-button:not(:disabled):hover {
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .secondary-button:disabled {
-  color: #8b98aa;
-  background: #eef3fa;
-  border-color: #d8e2ee;
+  color: #64748b;
+  background: #e2e8f0;
+  border-color: #cbd5e1;
   cursor: not-allowed;
-}
-
-.wechat-button {
-  margin-top: 16px;
-  border: 1px solid #b8dec6;
-  color: #137333;
-  background: #f1fbf5;
 }
 
 .message {
@@ -746,11 +760,89 @@ onBeforeUnmount(() => {
   border: 1px solid #b7e3c3;
 }
 
-.demo-note {
-  margin: 18px 0 0;
-  color: #6c7a92;
-  font-size: 13px;
-  line-height: 1.7;
+@keyframes grid-drift {
+  from {
+    background-position: 0 0;
+  }
+
+  to {
+    background-position: 58px 58px;
+  }
+}
+
+@keyframes brand-glow {
+  from {
+    background-position: 0% 0%, 100% 100%, 0 0;
+  }
+
+  to {
+    background-position: 12% 8%, 86% 92%, 0 0;
+  }
+}
+
+@keyframes float-panel {
+  from {
+    opacity: 0.28;
+    transform: translate3d(0, 0, 0) rotate(12deg);
+  }
+
+  to {
+    opacity: 0.58;
+    transform: translate3d(14px, 18px, 0) rotate(18deg);
+  }
+}
+
+@keyframes scan-line {
+  0% {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+
+  42% {
+    opacity: 0.65;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(44px);
+  }
+}
+
+@keyframes emblem-glow {
+  from {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 0 0 rgba(224, 242, 254, 0);
+  }
+
+  to {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 14px 34px rgba(56, 189, 248, 0.24);
+  }
+}
+
+@keyframes light-sweep {
+  from {
+    opacity: 0.5;
+    transform: translateX(-12px) rotate(-16deg);
+  }
+
+  to {
+    opacity: 0.9;
+    transform: translateX(18px) rotate(-16deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-panel,
+  .brand-content::before,
+  .brand-content::after,
+  .brand-emblem,
+  .brand-panel::before,
+  .brand-panel::after {
+    animation: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -759,45 +851,73 @@ onBeforeUnmount(() => {
   }
 
   .brand-panel {
-    min-height: 340px;
-    place-items: end start;
-    padding: 32px 24px;
+    min-height: 390px;
+    padding: 34px 24px;
   }
 
-  .brand-frame {
-    min-height: auto;
-    padding: 28px;
+  .brand-emblem {
+    margin-bottom: 24px;
   }
 
-  .brand-logo--light {
-    margin-bottom: 28px;
-    font-size: 22px;
+  .brand-content h1 {
+    font-size: 46px;
   }
 
-  .brand-panel h1 {
-    font-size: 38px;
+  .brand-subtitle {
+    font-size: 20px;
   }
 
-  .brand-description,
-  .signal-strip {
-    display: none;
+  .brand-slogan {
+    max-width: 500px;
+    font-size: 28px;
+  }
+
+  .brand-footer {
+    margin-top: 30px;
   }
 
   .login-side {
     min-height: auto;
     place-items: start center;
-    padding: 34px 20px 46px;
+    padding: 34px 20px 48px;
   }
 }
 
-@media (max-width: 500px) {
-  .tabs,
-  .sms-row {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 520px) {
+  .brand-panel {
+    min-height: 360px;
+  }
+
+  .brand-slogan {
+    font-size: 24px;
+  }
+
+  .brand-tags {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, max-content));
+    gap: 10px;
+  }
+
+  .brand-tags span {
+    min-height: 36px;
+    padding: 0 12px;
+  }
+
+  .brand-footer {
+    font-size: 14px;
+  }
+
+  .login-panel {
+    padding: 26px 20px;
   }
 
   .login-header h2 {
     font-size: 30px;
+  }
+
+  .tabs,
+  .sms-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

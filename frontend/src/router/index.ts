@@ -30,6 +30,14 @@ const router = createRouter({
       }
     },
     {
+      path: '/chat/:sessionId',
+      name: 'chat-session',
+      component: ChatView,
+      meta: {
+        requiresAuth: true
+      }
+    },
+    {
       path: '/chat',
       name: 'chat',
       component: ChatView,

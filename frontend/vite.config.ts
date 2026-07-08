@@ -10,7 +10,7 @@ export default defineConfig({
     allowedHosts: ['.trycloudflare.com'],
     proxy: {
       '/api': {
-        target: 'http://localhost:7510',
+        target: 'http://1.14.203.243',
         changeOrigin: true
       }
     }

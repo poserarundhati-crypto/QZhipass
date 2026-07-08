@@ -574,7 +574,12 @@
       }
 
       function completeDemoLogin() {
-        showMessage("静态登录 demo 已通过。请使用 Vue dev server 的 /index 查看正式首页。", "success");
+        const redirect = new URLSearchParams(window.location.search).get("redirect") || "/index";
+        const target = redirect.startsWith("/") && !redirect.startsWith("//") ? redirect : "/index";
+
+        window.localStorage.setItem("user_id", "10001");
+        window.localStorage.setItem("access_token", "mock-access-token");
+        window.location.assign(target);
       }
 
       tabs.forEach(tab => {
