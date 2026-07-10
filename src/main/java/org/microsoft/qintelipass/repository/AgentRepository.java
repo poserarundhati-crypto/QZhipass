@@ -1,7 +1,9 @@
 package org.microsoft.qintelipass.repository;
 
+import jakarta.persistence.LockModeType;
 import org.microsoft.qintelipass.models.Agent;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -13,6 +15,18 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
     Optional<Agent> findByIdAndCreatedBy(Long id, Long createdBy);
 
     Optional<Agent> findByIdAndCreatedByAndStatus(Long id, Long createdBy, Integer status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select agent from Agent agent
+             where agent.id = :agentId
+               and agent.createdBy = :createdBy
+               and agent.status = :status
+            """)
+    Optional<Agent> findActiveOwnedForUpdate(
+            @Param("agentId") Long agentId,
+            @Param("createdBy") Long createdBy,
+            @Param("status") Integer status);
 
     List<Agent> findAllByCreatedByAndStatusOrderByAgentNameAsc(Long createdBy, Integer status);
 

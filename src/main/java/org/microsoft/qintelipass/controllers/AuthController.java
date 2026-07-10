@@ -1,102 +1,181 @@
 package org.microsoft.qintelipass.controllers;
 
-import jakarta.servlet.http.Cookie;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.microsoft.qintelipass.CredentialManager;
 import org.microsoft.qintelipass.ILoginStrategy;
+import org.microsoft.qintelipass.IRegisterable;
 import org.microsoft.qintelipass.LoginStrategyFactory;
+import org.microsoft.qintelipass.dtos.UserDTO;
+import org.microsoft.qintelipass.exceptions.SmsRateLimitException;
 import org.microsoft.qintelipass.models.User;
 import org.microsoft.qintelipass.request.LoginRequest;
+import org.microsoft.qintelipass.request.RegisterRequest;
+import org.microsoft.qintelipass.response.ConversationResponse;
 import org.microsoft.qintelipass.response.ResponseBody;
-import org.microsoft.qintelipass.services.SmsServiceImpl;
+import org.microsoft.qintelipass.services.ConversationService;
+import org.microsoft.qintelipass.services.ISmsService;
 import org.microsoft.qintelipass.services.UserDetailsServiceImpl;
 import org.microsoft.qintelipass.util.JwtUtil;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.dao.DataAccessException;
 import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @Slf4j
 @RestController
-@RequestMapping("api/v1/auth/portal")
+@RequestMapping("/api/v1/auth/portal")
 public class AuthController {
     private final LoginStrategyFactory factory;
-    private final SmsServiceImpl smsService;
+    private final ISmsService smsService;
     private final JwtUtil jwtUtil;
     private final UserDetailsServiceImpl userDetailsService;
     private final CredentialManager credentialManager;
-    private static final String COOKIE_ROOT = "/";
-    private static final Integer EXPIRATION = 7 * 24 * 60 * 60;
-    private static final String HEADER = "Authorization";
-    @Autowired
-    public AuthController(LoginStrategyFactory factory, SmsServiceImpl smsService, JwtUtil jwtUtil, UserDetailsServiceImpl userDetailsService, CredentialManager credentialManager) {
+    private final IRegisterable registerService;
+    private final ConversationService conversationService;
+
+    public AuthController(
+            LoginStrategyFactory factory,
+            ISmsService smsService,
+            JwtUtil jwtUtil,
+            UserDetailsServiceImpl userDetailsService,
+            CredentialManager credentialManager,
+            IRegisterable registerService,
+            ConversationService conversationService) {
         this.factory = factory;
         this.smsService = smsService;
         this.jwtUtil = jwtUtil;
         this.userDetailsService = userDetailsService;
         this.credentialManager = credentialManager;
+        this.registerService = registerService;
+        this.conversationService = conversationService;
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginRequest formData, HttpServletResponse httpResponse){
-        String loginType = formData.getLoginType();
-        Map<String, Object> params = formData.getParams();
-        ILoginStrategy strategy = factory.getStrategy(loginType);
-        log.info("User response: {}", formData);
-        ResponseBody<User> response = strategy.authenticate(params);
-        log.info("Authenticator response: {}", response);
-        User user = response.getPayload();
-        if (response.isSuccess() && user != null) {
-            UserDetails userDetails = userDetailsService.loadUserByUsername(user.getName());
-            String token = jwtUtil.generateToken(userDetails, user.getId());
+    public ResponseEntity<ResponseBody<?>> login(@RequestBody LoginRequest formData) {
+        try {
+            String loginType = formData == null ? null : formData.getLoginType();
+            Map<String, Object> params = formData == null ? Map.of() : formData.effectiveParams();
+            log.info("Login request received. loginType={}", loginType);
 
-            Cookie userIdCookie = new Cookie("user_id", String.valueOf(user.getId()));
-            Cookie auth = new Cookie(HEADER, token);
-            userIdCookie.setPath(COOKIE_ROOT);
-            userIdCookie.setMaxAge(EXPIRATION);
-            auth.setPath(COOKIE_ROOT);
-            auth.setMaxAge(EXPIRATION);
-            httpResponse.addCookie(userIdCookie);
-            httpResponse.addCookie(auth);
-            return ResponseEntity.ok(response);
+            ILoginStrategy strategy = factory.getStrategy(loginType);
+            ResponseBody<User> authentication = strategy.authenticate(params);
+            User user = authentication.getPayload();
+            if (!authentication.isSuccess() || user == null) {
+                return ResponseEntity.badRequest().body(authentication);
+            }
+
+            UserDetails userDetails = userDetailsService.loadUserByUsername(user.getName());
+            String accessToken = jwtUtil.generateToken(userDetails, user.getId());
+            ConversationResponse conversation = conversationService.createInitialConversation(user.getId());
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("user_id", user.getId().toString());
+            payload.put("access_token", accessToken);
+            payload.put("initialConversationId", conversation.id().toString());
+            payload.put("conversation", conversation);
+
+            return ResponseEntity.ok(ResponseBody.builder()
+                    .success(true)
+                    .message("Login Successful.")
+                    .payload(payload)
+                    .build());
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.badRequest().body(ResponseBody.builder()
+                    .success(false)
+                    .message(exception.getMessage())
+                    .build());
+        } catch (DataAccessException exception) {
+            log.error("Authentication verification storage is unavailable: {}",
+                    exception.getClass().getSimpleName());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ResponseBody.builder()
+                    .success(false)
+                    .message("Authentication service is temporarily unavailable.")
+                    .build());
         }
-        return ResponseEntity.badRequest().body(response);
     }
 
-    @PostMapping("/sendcode")
-    public ResponseEntity<?> sendCode(@RequestBody Map<String, String> payload){
-        if (payload.get("phone") != null){
-            String code = smsService.sendSmsCode(payload.get("phone"));
-            log.info("Sent sms code: {}", code);
-            return ResponseEntity.ok(ResponseBody
-                    .builder()
+    @PostMapping({"/sendcode", "/send_code"})
+    public ResponseEntity<ResponseBody<Void>> sendCode(@RequestBody Map<String, String> payload) {
+        String phone = payload == null ? null : payload.get("phone");
+        if (!smsService.isValidPhone(phone)) {
+            return ResponseEntity.badRequest().body(ResponseBody.<Void>builder()
+                    .success(false)
+                    .message("Invalid phone number format.")
+                    .build());
+        }
+
+        try {
+            smsService.sendSmsCode(phone.trim());
+            return ResponseEntity.ok(ResponseBody.<Void>builder()
                     .success(true)
                     .message("Sms code sent.")
                     .build());
+        } catch (SmsRateLimitException exception) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(ResponseBody.<Void>builder()
+                    .success(false)
+                    .message(exception.getMessage())
+                    .build());
+        } catch (DataAccessException exception) {
+            log.error("SMS verification storage is unavailable: {}", exception.getClass().getSimpleName());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(ResponseBody.<Void>builder()
+                    .success(false)
+                    .message("SMS verification service is temporarily unavailable.")
+                    .build());
         }
-        return ResponseEntity
-                .badRequest()
-                .body(ResponseBody
-                        .builder()
-                        .success(false)
-                        .message("phone number should not be null")
-                );
     }
 
     @DeleteMapping("/logout")
-    public ResponseEntity<?> logoutUser(HttpServletResponse httpResponse, @RequestHeader("Authorization") String token){
-        if (!credentialManager.checkIfLogin(token)){
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Not Logged in.");
+    public ResponseEntity<ResponseBody<Void>> logoutUser(
+            @RequestHeader(value = "Authorization", required = false) String token) {
+        if (!credentialManager.checkIfLogin(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ResponseBody.<Void>builder()
+                    .success(false)
+                    .message("Not logged in.")
+                    .build());
         }
-        Cookie userIdCookie = new Cookie("user_id", "");
-        userIdCookie.setPath("/");
-        userIdCookie.setMaxAge(0);
-        httpResponse.addCookie(userIdCookie);
 
-        return ResponseEntity.ok(Map.of("success",true,"message", "OK"));
+        return ResponseEntity.ok(ResponseBody.<Void>builder()
+                .success(true)
+                .message("OK")
+                .build());
     }
+
+    @PostMapping("/register")
+    public ResponseEntity<ResponseBody<?>> register(@RequestBody RegisterRequest request) {
+        if (request == null) {
+            return ResponseEntity.badRequest().body(ResponseBody.builder()
+                    .success(false)
+                    .message("Registration information is incomplete or invalid.")
+                    .build());
+        }
+        User registered = registerService.register(request, request.getPassword());
+        if (registered == null) {
+            return ResponseEntity.badRequest().body(ResponseBody.builder()
+                    .success(false)
+                    .message("Registration information is incomplete or invalid.")
+                    .build());
+        }
+
+        UserDetails userDetails = userDetailsService.loadUserByUsername(registered.getName());
+        String accessToken = jwtUtil.generateToken(userDetails, registered.getId());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", registered.getId().toString());
+        payload.put("access_token", accessToken);
+        payload.put("user", UserDTO.fromUser(registered));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ResponseBody.builder()
+                .success(true)
+                .message("Registration successful.")
+                .payload(payload)
+                .build());
+    }
+
 }

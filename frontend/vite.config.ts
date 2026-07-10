@@ -1,17 +1,21 @@
 import tailwindcss from '@tailwindcss/vite'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-export default defineConfig({
-  plugins: [vue(), tailwindcss()],
-  server: {
-    host: '0.0.0.0',
-    port: 5173,
-    allowedHosts: ['.trycloudflare.com'],
-    proxy: {
-      '/api': {
-        target: 'http://1.14.203.243',
-        changeOrigin: true
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+
+  return {
+    plugins: [vue(), tailwindcss()],
+    server: {
+      host: '0.0.0.0',
+      port: 5173,
+      allowedHosts: ['.trycloudflare.com'],
+      proxy: {
+        '/api': {
+          target: env.VITE_DEV_PROXY_TARGET || 'http://127.0.0.1:7510',
+          changeOrigin: true
+        }
       }
     }
   }

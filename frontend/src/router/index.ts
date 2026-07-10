@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { isLoggedIn } from '../api/session'
-import LoginView from '../views/LoginView.vue'
 import ChatView from '../views/ChatView.vue'
+import HomeView from '../views/HomeView.vue'
+import LoginView from '../views/LoginView.vue'
 import SensitiveWordsView from '../views/SensitiveWordsView.vue'
 
 const router = createRouter({
@@ -9,7 +10,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: () => (isLoggedIn() ? '/index' : '/login')
+      redirect: () => (isLoggedIn() ? '/chat' : '/login')
     },
     {
       path: '/login',
@@ -19,7 +20,10 @@ const router = createRouter({
     {
       path: '/home',
       name: 'home',
-      redirect: '/index'
+      component: HomeView,
+      meta: {
+        requiresAuth: true
+      }
     },
     {
       path: '/index',
@@ -74,8 +78,8 @@ router.beforeEach(to => {
   }
 
   if (to.path === '/login' && authed) {
-    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/index'
-    return redirect
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '/chat'
+    return redirect.startsWith('/') && !redirect.startsWith('//') ? redirect : '/chat'
   }
 
   return true

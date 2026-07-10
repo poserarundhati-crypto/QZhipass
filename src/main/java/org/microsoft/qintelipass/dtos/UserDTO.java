@@ -1,8 +1,11 @@
 package org.microsoft.qintelipass.dtos;
 
+import tools.jackson.databind.annotation.JsonSerialize;
+import tools.jackson.databind.ser.std.ToStringSerializer;
 import lombok.*;
 import org.microsoft.qintelipass.enums.UserStatus;
 import org.microsoft.qintelipass.models.User;
+import org.microsoft.qintelipass.util.Snowflake;
 
 import java.time.OffsetDateTime;
 
@@ -12,12 +15,17 @@ import java.time.OffsetDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 public class UserDTO {
-    private Long id;
+    @JsonSerialize(using = ToStringSerializer.class)
+    @Builder.Default
+    private Long id = Snowflake.nextId();
     private String phone;
     private String email;
-    private UserStatus status;
+    @Builder.Default
+    private UserStatus status = UserStatus.NORMAL;
     private String name;
-    private OffsetDateTime joinedAt;
+    private String department;
+    @Builder.Default
+    private OffsetDateTime joinedAt = OffsetDateTime.now();
 
     public static UserDTO fromUser(User user) {
         return UserDTO.builder()
@@ -26,6 +34,7 @@ public class UserDTO {
                 .email(user.getEmail())
                 .status(user.getStatus())
                 .name(user.getName())
+                .department(user.getDepartment())
                 .joinedAt(user.getJoinedAt())
                 .build();
     }
@@ -37,6 +46,7 @@ public class UserDTO {
         user.setEmail(this.email);
         user.setStatus(this.status);
         user.setName(this.name);
+        user.setDepartment(this.department);
         return user;
     }
 }

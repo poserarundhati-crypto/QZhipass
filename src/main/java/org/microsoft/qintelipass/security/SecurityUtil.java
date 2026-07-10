@@ -7,10 +7,8 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 @Slf4j
 public class SecurityUtil {
-
     private SecurityUtil() {
     }
-
     public static AuthenticatedUser getCurrentAuthenticatedUser() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !(authentication.getPrincipal() instanceof AuthenticatedUser)) {

@@ -6,6 +6,7 @@ import org.microsoft.qintelipass.dtos.AgentDeleteResultDTO;
 import org.microsoft.qintelipass.dtos.AgentDetailDTO;
 import org.microsoft.qintelipass.dtos.AgentListDTO;
 import org.microsoft.qintelipass.dtos.UserTokenUsageDTO;
+import org.microsoft.qintelipass.exceptions.InvalidAgentRequestException;
 import org.microsoft.qintelipass.request.AgentUpdateRequest;
 import org.microsoft.qintelipass.response.ResponseBody;
 import org.microsoft.qintelipass.security.SecurityUtil;
@@ -64,24 +65,33 @@ public class AgentController {
     }
 
     @PostMapping("/call")
-    public ResponseEntity<ResponseBody<Map<String, Object>>> callLegacyAgent() {
-        return processAgentCall(currentUserId(), null);
+    public ResponseEntity<ResponseBody<Map<String, Object>>> callLegacyAgent(
+            @RequestParam(value = "modelId", defaultValue = "1") Long modelId) {
+        return processAgentCall(currentUserId(), null, modelId);
     }
 
     @PostMapping("/{agentId}/call")
-    public ResponseEntity<ResponseBody<Map<String, Object>>> callAgentById(@PathVariable Long agentId) {
+    public ResponseEntity<ResponseBody<Map<String, Object>>> callAgentById(
+            @PathVariable Long agentId,
+            @RequestParam(value = "modelId", defaultValue = "1") Long modelId) {
         Long userId = currentUserId();
-        agentService.requireActiveAgent(userId, agentId);
-        return processAgentCall(userId, agentId);
+        return processAgentCall(userId, agentId, modelId);
     }
 
-    private ResponseEntity<ResponseBody<Map<String, Object>>> processAgentCall(Long userId, Long agentId) {
+    private ResponseEntity<ResponseBody<Map<String, Object>>> processAgentCall(
+            Long userId,
+            Long agentId,
+            Long modelId) {
+        if (modelId == null || modelId <= 0) {
+            throw new InvalidAgentRequestException("modelId格式无效");
+        }
         int mockToken = 10003;
 
-        log.info("Agent call requested by authenticated user: {}, agentId: {}, estimated tokens: {}",
-                userId, agentId, mockToken);
-
-        boolean canProceed = tokenUsageService.checkTokenLimit(userId);
+        log.info("Agent call requested by authenticated user: {}, agentId: {}, modelId: {}, estimated tokens: {}",
+                userId, agentId, modelId, mockToken);
+        boolean canProceed = agentId == null
+                ? tokenUsageService.tryRecordTokenUsageWithinLimit(userId, modelId, mockToken)
+                : agentService.tryRecordActiveAgentCall(userId, agentId, modelId, mockToken);
         if (!canProceed) {
             UserTokenUsageDTO usage = tokenUsageService.getUserTokenUsage(userId);
             return ResponseEntity.badRequest().body(
@@ -95,7 +105,7 @@ public class AgentController {
 
         log.info("Agent call processing for user: {}", userId);
 
-        tokenUsageService.recordTokenUsage(userId, mockToken);
+        tokenUsageService.increaseDailyTotalTokens(mockToken);
 
         UserTokenUsageDTO updatedUsage = tokenUsageService.getUserTokenUsage(userId);
 

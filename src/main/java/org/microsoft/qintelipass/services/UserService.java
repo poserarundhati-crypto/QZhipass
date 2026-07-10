@@ -16,5 +16,5 @@ public interface UserService {
     boolean deactivateUser(Long userId);
     boolean isUserDeactivated(Long userId);
     User findByUsername(String username);
-    User login(String username, String password);
+
 }

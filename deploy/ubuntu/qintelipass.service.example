@@ -1,0 +1,24 @@
+[Unit]
+Description=QZhipass backend service
+After=network-online.target mysql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qintelipass
+Group=qintelipass
+WorkingDirectory=/opt/qintelipass
+EnvironmentFile=/opt/qintelipass/.env
+ExecStart=/opt/qintelipass/deploy/ubuntu/start.sh
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+SuccessExitStatus=143
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

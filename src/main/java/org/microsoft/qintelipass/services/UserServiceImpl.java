@@ -5,7 +5,6 @@ import org.microsoft.qintelipass.dtos.UserDTO;
 import org.microsoft.qintelipass.enums.UserStatus;
 import org.microsoft.qintelipass.models.User;
 import org.microsoft.qintelipass.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,13 +13,15 @@ import java.util.Optional;
 
 @Slf4j
 @Service
-public abstract class AbstractUserService implements UserService {
+public class UserServiceImpl implements UserService {
 
-    @Autowired
-    private UserRepository userRepository;
+    private final UserRepository userRepository;
+    private final UserCacheService userCacheService;
 
-    @Autowired
-    private UserCacheService userCacheService;
+    public UserServiceImpl(UserRepository userRepository, UserCacheService userCacheService) {
+        this.userRepository = userRepository;
+        this.userCacheService = userCacheService;
+    }
 
     @Override
     public User getUserById(Long userId) {
@@ -28,20 +29,9 @@ public abstract class AbstractUserService implements UserService {
             return null;
         }
 
-        UserDTO cachedUser = userCacheService.getCachedUserById(userId);
-        if (cachedUser != null) {
-            log.debug("User found in cache: {}", userId);
-            return cachedUser.toUser();
-        }
-
-        log.debug("User not in cache, fetching from database: {}", userId);
-        Optional<User> userOpt = userRepository.findById(userId);
-        if (userOpt.isPresent()) {
-            User user = userOpt.get();
-            userCacheService.cacheUser(UserDTO.fromUser(user));
-            return user;
-        }
-        return null;
+        // Authorization-sensitive user state is database authoritative. A cached NORMAL
+        // value must never keep a deactivated account authenticated after a Redis write failure.
+        return userRepository.findById(userId).orElse(null);
     }
 
     @Override
@@ -50,13 +40,8 @@ public abstract class AbstractUserService implements UserService {
             return null;
         }
 
-        UserDTO cachedUser = userCacheService.getCachedUserByPhone(phone);
-        if (cachedUser != null) {
-            log.debug("User found in cache by phone: {}", phone);
-            return cachedUser.toUser();
-        }
-
-        log.debug("User not in cache, fetching from database by phone: {}", phone);
+        // Authentication needs the password hash, which is intentionally absent from cached UserDTO data.
+        log.debug("Fetching credential-bearing user from database by phone");
         Optional<User> userOpt = userRepository.findByPhone(phone);
         if (userOpt.isPresent()) {
             User user = userOpt.get();
@@ -72,7 +57,7 @@ public abstract class AbstractUserService implements UserService {
             return null;
         }
 
-        log.debug("Fetching user by email: {}", email);
+        log.debug("Fetching credential-bearing user from database by email");
         Optional<User> userOpt = userRepository.findByEmail(email);
         if (userOpt.isPresent()) {
             return userOpt.get();
@@ -97,7 +82,7 @@ public abstract class AbstractUserService implements UserService {
             return;
         }
 
-        User savedUser = userRepository.save(user);
+        User savedUser = userRepository.saveAndFlush(user);
         log.info("User saved to database: {}", savedUser.getId());
 
         userCacheService.cacheUser(UserDTO.fromUser(savedUser));
@@ -122,7 +107,7 @@ public abstract class AbstractUserService implements UserService {
         }
 
         user.setStatus(UserStatus.DEACTIVATED);
-        User savedUser = userRepository.save(user);
+        User savedUser = userRepository.saveAndFlush(user);
 
         userCacheService.cacheUser(UserDTO.fromUser(savedUser));
 

@@ -1,6 +1,7 @@
 package org.microsoft.qintelipass.util;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 
 @Slf4j
 public class Snowflake {
@@ -18,11 +19,12 @@ public class Snowflake {
     private static final long TIMESTAMP_SHIFT = SEQUENCE_BITS + WORKER_ID_BITS + DATACENTER_ID_BITS;
 
     private static final long SEQUENCE_MASK = ~(-1L << SEQUENCE_BITS);
-
-    private final long datacenterId;
-    private final long workerId;
-    private long sequence = 0L;
-    private long lastTimestamp = -1L;
+    @Value("${microservice.workerid}")
+    private static long datacenterId;
+    @Value("${microservice.dadacenterid}")
+    private static long workerId;
+    private static long sequence = 0L;
+    private static long lastTimestamp = -1L;
 
     public Snowflake(long datacenterId, long workerId) {
         if (datacenterId > MAX_DATACENTER_ID || datacenterId < 0) {
@@ -31,8 +33,6 @@ public class Snowflake {
         if (workerId > MAX_WORKER_ID || workerId < 0) {
             throw new IllegalArgumentException(String.format("workerId 不能大于 %d 或小于 0", MAX_WORKER_ID));
         }
-        this.datacenterId = datacenterId;
-        this.workerId = workerId;
         log.info("Snowflake initialized with datacenterId: {}, workerId: {}", datacenterId, workerId);
     }
 
@@ -40,7 +40,7 @@ public class Snowflake {
         this(0, 0);
     }
 
-    public synchronized long nextId() {
+    public static synchronized long nextId() {
         long timestamp = timeGen();
 
         if (timestamp < lastTimestamp) {
@@ -64,7 +64,7 @@ public class Snowflake {
                 | sequence;
     }
 
-    private long tilNextMillis(long lastTimestamp) {
+    private static long tilNextMillis(long lastTimestamp) {
         long timestamp = timeGen();
         while (timestamp <= lastTimestamp) {
             timestamp = timeGen();
@@ -72,7 +72,7 @@ public class Snowflake {
         return timestamp;
     }
 
-    private long timeGen() {
+    private static long timeGen() {
         return System.currentTimeMillis();
     }
 

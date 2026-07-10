@@ -5,7 +5,6 @@ import org.microsoft.qintelipass.enums.UserStatus;
 import org.microsoft.qintelipass.models.User;
 import org.microsoft.qintelipass.response.ResponseBody;
 import org.microsoft.qintelipass.services.UserService;
-import org.microsoft.qintelipass.util.QZhiPasswordPattern;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Map;
@@ -18,7 +17,6 @@ public class MobilePasswordStrategy implements ILoginStrategy {
         this.userService = userService;
         this.passwordEncoder = passwordEncoder;
     }
-
     @Override
     public String getType() {
         return "MOBILE_PWD";
@@ -26,20 +24,13 @@ public class MobilePasswordStrategy implements ILoginStrategy {
 
     @Override
     public ResponseBody<User> authenticate(Map<String, Object> params) {
-        String phone = (String) params.get("phone_number");
-        String password = (String) params.get("password");
+        String phone = readString(params, "phone_number", "phone", "mobile");
+        String password = readPassword(params);
 
         if (phone == null || phone.isBlank() || password == null || password.isBlank()) {
             return ResponseBody.<User>builder()
                     .success(false)
                     .message("Phone number and password should not be null.")
-                    .build();
-        }
-
-        if (!QZhiPasswordPattern.validate(password)) {
-            return ResponseBody.<User>builder()
-                    .success(false)
-                    .message(QZhiPasswordPattern.REQUIREMENT_MESSAGE)
                     .build();
         }
 
@@ -51,10 +42,10 @@ public class MobilePasswordStrategy implements ILoginStrategy {
                     .build();
         }
 
-        if (UserStatus.DEACTIVATED.equals(user.getStatus())) {
+        if (!UserStatus.NORMAL.equals(user.getStatus())) {
             return ResponseBody.<User>builder()
                     .success(false)
-                    .message("Your account has been deactivated")
+                    .message("Your account is not active")
                     .build();
         }
 
@@ -70,5 +61,20 @@ public class MobilePasswordStrategy implements ILoginStrategy {
                 .message("Login Successful.")
                 .payload(user)
                 .build();
+    }
+
+    private String readString(Map<String, Object> params, String... keys) {
+        for (String key : keys) {
+            Object value = params.get(key);
+            if (value instanceof String text && !text.isBlank()) {
+                return text.trim();
+            }
+        }
+        return null;
+    }
+
+    private String readPassword(Map<String, Object> params) {
+        Object value = params.get("password");
+        return value instanceof String text && !text.isBlank() ? text : null;
     }
 }

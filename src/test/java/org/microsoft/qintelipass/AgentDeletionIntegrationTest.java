@@ -13,6 +13,7 @@ import org.microsoft.qintelipass.repository.AgentRepository;
 import org.microsoft.qintelipass.repository.UserRepository;
 import org.microsoft.qintelipass.security.AuthenticatedUser;
 import org.microsoft.qintelipass.services.TokenUsageService;
+import org.microsoft.qintelipass.services.AgentService;
 import org.microsoft.qintelipass.services.UserCacheService;
 import org.microsoft.qintelipass.util.JwtUtil;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,11 +34,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest(
@@ -67,6 +72,9 @@ class AgentDeletionIntegrationTest {
     private JwtUtil jwtUtil;
 
     @Autowired
+    private AgentService agentService;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     @MockitoBean
@@ -91,7 +99,8 @@ class AgentDeletionIntegrationTest {
         otherUser = userRepository.saveAndFlush(user("other-owner", "13800000002"));
         ownerToken = tokenFor(owner);
         otherUserToken = tokenFor(otherUser);
-        when(tokenUsageService.checkTokenLimit(anyLong())).thenReturn(true);
+        when(tokenUsageService.tryRecordTokenUsageWithinLimit(anyLong(), anyLong(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(true);
         when(tokenUsageService.getUserTokenUsage(anyLong())).thenReturn(UserTokenUsageDTO.builder()
                 .userId(owner.getId())
                 .userName(owner.getName())
@@ -140,6 +149,8 @@ class AgentDeletionIntegrationTest {
                 "POST", "/api/v1/agent/" + AGENT_ID + "/call", ownerToken, null);
         assertEquals(200, callResponse.statusCode());
         assertTrue(json(callResponse).path("success").asBoolean());
+        verify(tokenUsageService).tryRecordTokenUsageWithinLimit(owner.getId(), 1L, 10003);
+        verify(tokenUsageService).increaseDailyTotalTokens(10003);
     }
 
     @Test
@@ -181,6 +192,7 @@ class AgentDeletionIntegrationTest {
         JsonNode secondPayload = json(secondDelete).path("payload");
         assertTrue(secondPayload.path("deleted").asBoolean());
         assertTrue(secondPayload.path("alreadyDeleted").asBoolean());
+        assertTrue(secondPayload.path("agentName").isNull());
         assertFalse(secondDelete.body().toLowerCase().contains("api_key"));
         assertFalse(secondDelete.body().toLowerCase().contains("apikey"));
     }
@@ -232,11 +244,58 @@ class AgentDeletionIntegrationTest {
     }
 
     @Test
+    void activeCallLockLinearizesWithConcurrentDelete() throws Exception {
+        saveAgent(AGENT_ID, "调用删除竞态助手", owner.getId(), Agent.STATUS_ACTIVE);
+        CountDownLatch reservationStarted = new CountDownLatch(1);
+        CountDownLatch releaseReservation = new CountDownLatch(1);
+        CountDownLatch deleteStarted = new CountDownLatch(1);
+        when(tokenUsageService.tryRecordTokenUsageWithinLimit(owner.getId(), 1L, 10003))
+                .thenAnswer(invocation -> {
+                    reservationStarted.countDown();
+                    if (!releaseReservation.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("quota reservation release timed out");
+                    }
+                    return true;
+                });
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<Boolean> call = executor.submit(() -> agentService.tryRecordActiveAgentCall(
+                owner.getId(), AGENT_ID, 1L, 10003));
+
+        try {
+            assertTrue(reservationStarted.await(5, TimeUnit.SECONDS));
+            Future<org.microsoft.qintelipass.dtos.AgentDeleteResultDTO> delete =
+                    executor.submit(() -> {
+                        deleteStarted.countDown();
+                        return agentService.deleteAgent(owner.getId(), AGENT_ID);
+                    });
+
+            assertTrue(deleteStarted.await(5, TimeUnit.SECONDS));
+            assertThrows(TimeoutException.class, () -> delete.get(300, TimeUnit.MILLISECONDS));
+            releaseReservation.countDown();
+
+            assertTrue(call.get(5, TimeUnit.SECONDS));
+            assertFalse(delete.get(5, TimeUnit.SECONDS).alreadyDeleted());
+            assertEquals(Agent.STATUS_DELETED,
+                    agentRepository.findById(AGENT_ID).orElseThrow().getStatus());
+        } finally {
+            releaseReservation.countDown();
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void anotherUserCannotConfirmOrDeleteAgent() throws Exception {
         saveAgent(AGENT_ID, "合同审查助手", owner.getId(), Agent.STATUS_ACTIVE);
 
         assertEquals(404, request(
                 "GET", "/api/v1/agent/" + AGENT_ID + "/delete-confirmation", otherUserToken, null).statusCode());
+        assertEquals(404, request("GET", "/api/v1/agent/" + AGENT_ID, otherUserToken, null).statusCode());
+        assertEquals(404, request(
+                "PUT", "/api/v1/agent/" + AGENT_ID, otherUserToken, "{\"agentName\":\"越权修改\"}").statusCode());
+        assertEquals(404, request(
+                "POST", "/api/v1/agent/" + AGENT_ID + "/call", otherUserToken, null).statusCode());
         HttpResponse<String> response = request("DELETE", "/api/v1/agent/" + AGENT_ID, otherUserToken, null);
         assertEquals(404, response.statusCode());
         assertEquals("Agent不存在或无权操作", json(response).path("message").asText());
@@ -257,6 +316,23 @@ class AgentDeletionIntegrationTest {
     }
 
     @Test
+    void deactivatedUsersExistingJwtCannotDeleteAgent() throws Exception {
+        saveAgent(AGENT_ID, "合同审查助手", owner.getId(), Agent.STATUS_ACTIVE);
+        User staleNormalCache = user(owner.getName(), owner.getPhone());
+        staleNormalCache.setId(owner.getId());
+        when(userCacheService.getCachedUserById(owner.getId())).thenReturn(staleNormalCache);
+        owner.setStatus(UserStatus.DEACTIVATED);
+        userRepository.saveAndFlush(owner);
+
+        HttpResponse<String> response = request("DELETE", "/api/v1/agent/" + AGENT_ID, ownerToken, null);
+
+        assertEquals(401, response.statusCode());
+        assertFalse(json(response).path("success").asBoolean());
+        assertEquals(Agent.STATUS_ACTIVE, agentRepository.findById(AGENT_ID).orElseThrow().getStatus());
+        verify(userCacheService, never()).getCachedUserById(owner.getId());
+    }
+
+    @Test
     void invalidAndMissingAgentIdsReturnStableErrors() throws Exception {
         HttpResponse<String> invalid = request("DELETE", "/api/v1/agent/not-a-number", ownerToken, null);
         assertEquals(400, invalid.statusCode());
@@ -265,6 +341,9 @@ class AgentDeletionIntegrationTest {
         HttpResponse<String> invalidCall = request(
                 "POST", "/api/v1/agent/not-a-number/call", ownerToken, null);
         assertEquals(400, invalidCall.statusCode());
+
+        assertEquals(400, request(
+                "POST", "/api/v1/agent/call?modelId=0", ownerToken, null).statusCode());
 
         HttpResponse<String> nonPositive = request("DELETE", "/api/v1/agent/0", ownerToken, null);
         assertEquals(400, nonPositive.statusCode());

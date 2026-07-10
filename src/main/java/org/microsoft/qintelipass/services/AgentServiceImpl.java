@@ -20,9 +20,11 @@ public class AgentServiceImpl implements AgentService {
     private static final int MAX_AGENT_NAME_LENGTH = 128;
 
     private final AgentRepository agentRepository;
+    private final TokenUsageService tokenUsageService;
 
-    public AgentServiceImpl(AgentRepository agentRepository) {
+    public AgentServiceImpl(AgentRepository agentRepository, TokenUsageService tokenUsageService) {
         this.agentRepository = agentRepository;
+        this.tokenUsageService = tokenUsageService;
     }
 
     @Override
@@ -87,33 +89,47 @@ public class AgentServiceImpl implements AgentService {
         requireCurrentUser(currentUserId);
         validateAgentId(agentId);
 
-        Agent ownedAgent = agentRepository.findByIdAndCreatedBy(agentId, currentUserId)
-                .orElseThrow(AgentNotFoundException::new);
-        String agentName = ownedAgent.getAgentName();
-
-        if (Agent.STATUS_DELETED == ownedAgent.getStatus()) {
-            return deleteResult(ownedAgent, true);
-        }
-        if (Agent.STATUS_ACTIVE != ownedAgent.getStatus()) {
-            throw new AgentNotFoundException();
-        }
-
         int affectedRows = agentRepository.markDeleted(
                 agentId,
                 currentUserId,
                 Agent.STATUS_ACTIVE,
                 Agent.STATUS_DELETED);
-        if (affectedRows == 1) {
-            return new AgentDeleteResultDTO(agentId.toString(), agentName, true, false);
+        if (affectedRows < 0 || affectedRows > 1) {
+            throw new IllegalStateException("Agent删除影响行数异常");
         }
 
-        return new AgentDeleteResultDTO(agentId.toString(), agentName, true, true);
+        Agent ownedAgent = agentRepository.findByIdAndCreatedBy(agentId, currentUserId)
+                .filter(agent -> Integer.valueOf(Agent.STATUS_DELETED).equals(agent.getStatus()))
+                .orElseThrow(AgentNotFoundException::new);
+        boolean alreadyDeleted = affectedRows == 0;
+        String agentName = alreadyDeleted ? null : ownedAgent.getAgentName();
+        return new AgentDeleteResultDTO(agentId.toString(), agentName, true, alreadyDeleted);
     }
 
     @Override
     @Transactional(readOnly = true)
     public void requireActiveAgent(Long currentUserId, Long agentId) {
         getActiveOwnedAgent(currentUserId, agentId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public boolean tryRecordActiveAgentCall(
+            Long currentUserId,
+            Long agentId,
+            Long modelId,
+            int tokensUsed) {
+        requireCurrentUser(currentUserId);
+        validateAgentId(agentId);
+        if (modelId == null || modelId <= 0 || tokensUsed <= 0) {
+            throw new InvalidAgentRequestException("modelId或token数量格式无效");
+        }
+
+        agentRepository.findActiveOwnedForUpdate(
+                        agentId, currentUserId, Agent.STATUS_ACTIVE)
+                .orElseThrow(AgentNotFoundException::new);
+        return tokenUsageService.tryRecordTokenUsageWithinLimit(
+                currentUserId, modelId, tokensUsed);
     }
 
     private Agent getActiveOwnedAgent(Long currentUserId, Long agentId) {
@@ -126,14 +142,6 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentDetailDTO toDetail(Agent agent) {
         return new AgentDetailDTO(agent.getId().toString(), agent.getAgentName());
-    }
-
-    private AgentDeleteResultDTO deleteResult(Agent agent, boolean alreadyDeleted) {
-        return new AgentDeleteResultDTO(
-                agent.getId().toString(),
-                agent.getAgentName(),
-                true,
-                alreadyDeleted);
     }
 
     private void requireCurrentUser(Long currentUserId) {

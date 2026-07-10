@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.microsoft.qintelipass.dtos.UserDTO;
+import org.microsoft.qintelipass.models.User;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
@@ -19,9 +20,11 @@ public class UserCacheService {
 
     @Autowired
     private RedisTemplate<String, String> redisTemplate;
-
+    private final ObjectMapper objectMapper;
     @Autowired
-    private ObjectMapper objectMapper;
+    public UserCacheService(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     public void cacheUser(UserDTO user) {
         try {
@@ -40,7 +43,7 @@ public class UserCacheService {
         }
     }
 
-    public UserDTO getCachedUserById(Long userId) {
+    public User getCachedUserById(Long userId) {
         if (userId == null) {
             return null;
         }
@@ -56,15 +59,15 @@ public class UserCacheService {
             return null;
         }
         try {
-            return objectMapper.readValue(userJson, UserDTO.class);
+            return objectMapper.readValue(userJson, User.class);
         } catch (JsonProcessingException e) {
-            log.error("Failed to deserialize cached user: {}", userId, e);
-            deleteCachedUser(userId);
+            log.warn("Invalid cached user data was evicted: userId={}", userId);
+            deleteKeyQuietly(userKey);
             return null;
         }
     }
 
-    public UserDTO getCachedUserByPhone(String phone) {
+    public User getCachedUserByPhone(String phone) {
         if (phone == null || phone.trim().isEmpty()) {
             return null;
         }
@@ -82,7 +85,7 @@ public class UserCacheService {
         try {
             return getCachedUserById(Long.parseLong(userIdStr));
         } catch (NumberFormatException e) {
-            log.error("Invalid user ID in cache for phone: {}", phone, e);
+            log.error("Invalid user ID in cached phone index", e);
             try {
                 redisTemplate.delete(phoneKey);
             } catch (RuntimeException redisException) {
@@ -96,14 +99,23 @@ public class UserCacheService {
         if (userId == null) {
             return;
         }
-        UserDTO cachedUser = getCachedUserById(userId);
+        User cachedUser = getCachedUserById(userId);
         try {
             if (cachedUser != null && cachedUser.getPhone() != null) {
                 redisTemplate.delete(PHONE_INDEX_PREFIX + cachedUser.getPhone());
             }
             redisTemplate.delete(USER_KEY_PREFIX + userId);
         } catch (RuntimeException e) {
-            log.warn("Redis unavailable, could not delete user cache: {}", e.getMessage());
+            log.warn("Redis unavailable, could not delete user cache: {}", e.getClass().getSimpleName());
+        }
+    }
+
+    private void deleteKeyQuietly(String key) {
+        try {
+            redisTemplate.delete(key);
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, could not delete invalid cache entry: {}",
+                    e.getClass().getSimpleName());
         }
     }
 }

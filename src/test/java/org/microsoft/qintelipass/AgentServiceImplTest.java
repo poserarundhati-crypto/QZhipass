@@ -14,6 +14,7 @@ import org.microsoft.qintelipass.models.Agent;
 import org.microsoft.qintelipass.repository.AgentRepository;
 import org.microsoft.qintelipass.request.AgentUpdateRequest;
 import org.microsoft.qintelipass.services.AgentServiceImpl;
+import org.microsoft.qintelipass.services.TokenUsageService;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -49,12 +50,14 @@ class AgentServiceImplTest {
 
     @Mock
     private AgentRepository agentRepository;
+    @Mock
+    private TokenUsageService tokenUsageService;
 
     private AgentServiceImpl agentService;
 
     @BeforeEach
     void setUp() {
-        agentService = new AgentServiceImpl(agentRepository);
+        agentService = new AgentServiceImpl(agentRepository, tokenUsageService);
     }
 
     @Test
@@ -78,7 +81,7 @@ class AgentServiceImplTest {
 
     @Test
     void deleteAgentMarksOwnedActiveAgentDeletedWhenOneRowIsAffected() {
-        Agent agent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_ACTIVE);
+        Agent agent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_DELETED);
         when(agentRepository.findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID))
                 .thenReturn(Optional.of(agent));
         when(agentRepository.markDeleted(
@@ -93,13 +96,13 @@ class AgentServiceImplTest {
                 () -> assertTrue(result.deleted()),
                 () -> assertFalse(result.alreadyDeleted()));
         InOrder order = inOrder(agentRepository);
-        order.verify(agentRepository).findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID);
         order.verify(agentRepository).markDeleted(
                 AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED);
+        order.verify(agentRepository).findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID);
     }
 
     @Test
-    void deleteAgentReturnsAlreadyDeletedWithoutUpdatingWhenAgentWasDeleted() {
+    void deleteAgentReturnsAlreadyDeletedWithoutLeakingDeletedAgentName() {
         Agent deletedAgent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_DELETED);
         when(agentRepository.findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID))
                 .thenReturn(Optional.of(deletedAgent));
@@ -109,15 +112,16 @@ class AgentServiceImplTest {
         assertAll(
                 () -> assertTrue(result.deleted()),
                 () -> assertTrue(result.alreadyDeleted()),
-                () -> assertEquals(AGENT_NAME, result.agentName()));
-        verify(agentRepository, never()).markDeleted(anyLong(), anyLong(), anyInt(), anyInt());
+                () -> assertEquals(null, result.agentName()));
+        verify(agentRepository).markDeleted(
+                AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED);
     }
 
     @Test
     void deleteAgentTreatsZeroAffectedRowsAsConcurrentAlreadyDeletedResult() {
-        Agent activeAgent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_ACTIVE);
+        Agent deletedAgent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_DELETED);
         when(agentRepository.findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID))
-                .thenReturn(Optional.of(activeAgent));
+                .thenReturn(Optional.of(deletedAgent));
         when(agentRepository.markDeleted(
                 AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED))
                 .thenReturn(0);
@@ -128,9 +132,23 @@ class AgentServiceImplTest {
                 () -> assertTrue(result.deleted()),
                 () -> assertTrue(result.alreadyDeleted()),
                 () -> assertEquals("9001", result.agentId()),
-                () -> assertEquals(AGENT_NAME, result.agentName()));
+                () -> assertEquals(null, result.agentName()));
         verify(agentRepository).markDeleted(
                 AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED);
+    }
+
+    @Test
+    void deleteAgentRejectsZeroAffectedRowsWhenOwnedAgentIsNotDeleted() {
+        Agent inactiveAgent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, 2);
+        when(agentRepository.markDeleted(
+                AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED))
+                .thenReturn(0);
+        when(agentRepository.findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID))
+                .thenReturn(Optional.of(inactiveAgent));
+
+        assertThrows(
+                AgentNotFoundException.class,
+                () -> agentService.deleteAgent(CURRENT_USER_ID, AGENT_ID));
     }
 
     @Test
@@ -153,7 +171,8 @@ class AgentServiceImplTest {
                 () -> assertEquals("Agent不存在或无权操作", missing.getMessage()),
                 () -> assertEquals(missing.getMessage(), otherUsers.getMessage()));
         verify(agentRepository, never()).findById(anyLong());
-        verify(agentRepository, never()).markDeleted(anyLong(), anyLong(), anyInt(), anyInt());
+        verify(agentRepository, org.mockito.Mockito.times(2))
+                .markDeleted(anyLong(), anyLong(), anyInt(), anyInt());
     }
 
     @Test
@@ -234,6 +253,38 @@ class AgentServiceImplTest {
     }
 
     @Test
+    void activeAgentCallLocksOwnedAgentBeforeAtomicallyReservingQuota() {
+        Agent agent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_ACTIVE);
+        when(agentRepository.findActiveOwnedForUpdate(
+                AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE))
+                .thenReturn(Optional.of(agent));
+        when(tokenUsageService.tryRecordTokenUsageWithinLimit(
+                CURRENT_USER_ID, 1L, 10003)).thenReturn(true);
+
+        assertTrue(agentService.tryRecordActiveAgentCall(
+                CURRENT_USER_ID, AGENT_ID, 1L, 10003));
+
+        InOrder inOrder = inOrder(agentRepository, tokenUsageService);
+        inOrder.verify(agentRepository).findActiveOwnedForUpdate(
+                AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE);
+        inOrder.verify(tokenUsageService).tryRecordTokenUsageWithinLimit(
+                CURRENT_USER_ID, 1L, 10003);
+    }
+
+    @Test
+    void deletedAgentCannotReserveCallQuota() {
+        when(agentRepository.findActiveOwnedForUpdate(
+                AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE))
+                .thenReturn(Optional.empty());
+
+        assertThrows(AgentNotFoundException.class, () ->
+                agentService.tryRecordActiveAgentCall(
+                        CURRENT_USER_ID, AGENT_ID, 1L, 10003));
+
+        verifyNoInteractions(tokenUsageService);
+    }
+
+    @Test
     void updateAgentFailsWhenConditionalUpdateCannotFindAnActiveOwnedAgent() {
         AgentUpdateRequest request = new AgentUpdateRequest("新名称");
         when(agentRepository.renameActiveAgent(
@@ -254,11 +305,8 @@ class AgentServiceImplTest {
 
     @Test
     void databaseExceptionDuringDeleteIsPropagated() {
-        Agent activeAgent = agent(AGENT_ID, CURRENT_USER_ID, AGENT_NAME, Agent.STATUS_ACTIVE);
         DataAccessResourceFailureException databaseFailure =
                 new DataAccessResourceFailureException("database unavailable");
-        when(agentRepository.findByIdAndCreatedBy(AGENT_ID, CURRENT_USER_ID))
-                .thenReturn(Optional.of(activeAgent));
         when(agentRepository.markDeleted(
                 AGENT_ID, CURRENT_USER_ID, Agent.STATUS_ACTIVE, Agent.STATUS_DELETED))
                 .thenThrow(databaseFailure);

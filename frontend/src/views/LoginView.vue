@@ -3,12 +3,11 @@ import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { isValidMobile, sendSmsCode } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
+import { handleLoginError } from '../utils/cancelledUserHandler'
 
 type LoginTab = 'phone' | 'email' | 'sms'
 
-const INDEX_ROUTE = '/index'
-const PASSWORD_PATTERN = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/
-const PASSWORD_REQUIREMENT_MESSAGE = '密码不符合要求：必须至少8位，并包含大写字母、小写字母、数字和特殊字符'
+const INDEX_ROUTE = '/chat'
 
 const router = useRouter()
 const route = useRoute()
@@ -54,10 +53,10 @@ const normalizedPhoneMobile = computed(() => phoneForm.mobile.trim())
 const normalizedEmail = computed(() => emailForm.email.trim())
 const normalizedSmsMobile = computed(() => smsForm.mobile.trim())
 const canSubmitPhone = computed(
-  () => normalizedPhoneMobile.value.length > 0 && PASSWORD_PATTERN.test(phoneForm.password) && !submitting.value
+  () => normalizedPhoneMobile.value.length > 0 && phoneForm.password.length > 0 && !submitting.value
 )
 const canSubmitEmail = computed(
-  () => normalizedEmail.value.length > 0 && PASSWORD_PATTERN.test(emailForm.password) && !submitting.value
+  () => normalizedEmail.value.length > 0 && emailForm.password.length > 0 && !submitting.value
 )
 const hasInvalidSmsMobile = computed(
   () => normalizedSmsMobile.value.length > 0 && !isValidMobile(normalizedSmsMobile.value)
@@ -82,29 +81,6 @@ function clearMessage() {
 function showMessage(text: string, type: 'error' | 'success') {
   messageText.value = text
   messageType.value = type
-}
-
-function validatePassword(password: string) {
-  if (PASSWORD_PATTERN.test(password)) {
-    return true
-  }
-
-  showMessage(PASSWORD_REQUIREMENT_MESSAGE, 'error')
-  return false
-}
-
-function handlePasswordInput(password: string) {
-  if (!password || PASSWORD_PATTERN.test(password)) {
-    clearMessage()
-    return
-  }
-
-  showMessage(PASSWORD_REQUIREMENT_MESSAGE, 'error')
-}
-
-function handlePasswordInputEvent(event: Event) {
-  const password = event.target instanceof HTMLInputElement ? event.target.value : ''
-  handlePasswordInput(password)
 }
 
 function handleSmsMobileInputEvent(event: Event) {
@@ -135,12 +111,16 @@ function getErrorText(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
+function handleAuthenticationError(error: unknown, fallback: string) {
+  try {
+    handleLoginError(error)
+  } catch {
+    showMessage(getErrorText(error, fallback), 'error')
+  }
+}
+
 async function handlePhoneLogin() {
   if (!canSubmitPhone.value) {
-    return
-  }
-
-  if (!validatePassword(phoneForm.password)) {
     return
   }
 
@@ -151,7 +131,7 @@ async function handlePhoneLogin() {
     await authStore.passwordLogin(normalizedPhoneMobile.value, phoneForm.password)
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(getErrorText(error, '账号或密码错误'), 'error')
+    handleAuthenticationError(error, '账号或密码错误')
   } finally {
     submitting.value = false
   }
@@ -162,10 +142,6 @@ async function handleEmailLogin() {
     return
   }
 
-  if (!validatePassword(emailForm.password)) {
-    return
-  }
-
   submitting.value = true
   clearMessage()
 
@@ -173,7 +149,7 @@ async function handleEmailLogin() {
     await authStore.emailPasswordLogin(normalizedEmail.value, emailForm.password)
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(getErrorText(error, '账号或密码错误'), 'error')
+    handleAuthenticationError(error, '账号或密码错误')
   } finally {
     submitting.value = false
   }
@@ -230,7 +206,7 @@ async function handleSmsLogin() {
     await authStore.smsLogin(normalizedSmsMobile.value, smsForm.code.trim())
     await redirectAfterLogin()
   } catch (error) {
-    showMessage(getErrorText(error, '验证码登录失败'), 'error')
+    handleAuthenticationError(error, '验证码登录失败')
   } finally {
     submitting.value = false
   }
@@ -306,7 +282,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="handlePasswordInputEvent"
+              @input="clearMessage"
             />
           </label>
 
@@ -334,7 +310,7 @@ onBeforeUnmount(() => {
               autocomplete="current-password"
               placeholder="请输入密码"
               type="password"
-              @input="handlePasswordInputEvent"
+              @input="clearMessage"
             />
           </label>
 

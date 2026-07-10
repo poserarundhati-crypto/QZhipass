@@ -5,14 +5,11 @@ import { ElMessage } from 'element-plus'
 import {
   Bell,
   ChatDotSquare,
-  Document,
   Download,
-  EditPen,
   Headset,
   Histogram,
   HomeFilled,
   Paperclip,
-  Promotion,
   Search,
   Setting,
   Share,
@@ -21,7 +18,8 @@ import {
   UserFilled,
 } from '@element-plus/icons-vue'
 import { callAgent } from '../api/agent'
-import { createSession } from '../api/conversation'
+import http, { getErrorMessage } from '../api/http'
+import { readLoginInfo, saveInitialConversationId } from '../api/session'
 import BrandLogo from '../components/BrandLogo.vue'
 import { useAuthStore } from '../stores/auth'
 
@@ -34,7 +32,7 @@ const searchQuery = ref('')
 const inputText = ref('')
 const selectedModel = ref('gpt4-omni')
 const selectedAgent = ref('data-analyst')
-const selectedChatId = ref('1')
+const selectedChatId = ref<string | null>(null)
 const showModelDropdown = ref(false)
 const showAgentDropdown = ref(false)
 const agentSearchQuery = ref('')
@@ -59,71 +57,40 @@ const agents = ref([
   { value: 'coder', label: 'Code Assistant Agent' },
 ])
 
+interface ApiResponse<T> {
+  success?: boolean
+  message?: string
+  data?: T
+}
+
+interface ConversationPayload {
+  id?: string
+  conversationId?: string
+  title?: string
+  modelKey?: string | null
+}
+
 interface ChatSummary {
   id: string
   title: string
   icon: Component
 }
 
-const chats = ref<ChatSummary[]>([
-  { id: '1', title: 'Q4 数据分析报告撰写', icon: markRaw(Document) },
-  { id: '2', title: '品牌营销文案优化', icon: markRaw(Promotion) },
-  { id: '3', title: '产品需求文档梳理', icon: markRaw(EditPen) },
-  { id: '4', title: '用户反馈情绪分析', icon: markRaw(ChatDotSquare) },
-  { id: '5', title: '竞品市场调研总结', icon: markRaw(Search) },
-])
+interface CreateConversationOptions {
+  silent?: boolean
+  persistAsInitial?: boolean
+}
+
+const chats = ref<ChatSummary[]>([])
 
 interface Message {
-  id: number
+  id: string
   role: 'user' | 'ai'
   content: string
   timestamp: string
   actions?: string[]
 }
-const messages = ref<Message[]>([
-  {
-    id: 1,
-    role: 'user',
-    content: '请帮我分析 Q4 销售数据，生成一份综合报告，包含趋势图和关键指标。',
-    timestamp: '10:28 AM',
-  },
-  {
-    id: 2,
-    role: 'ai',
-    content:
-      '好的，我已经完成了 **Q4 销售数据的分析**。以下是主要发现：\n\n1. **总销售额**：¥8,420万，同比增长 12.4%\n2. **线上渠道占比**：首次突破 45%\n3. **华东地区** 增长最快，达到 18.7%\n4. **客单价** 提升至 ¥2,840（+5.2%）\n\n建议重点关注以下数据维度进行深入分析。',
-    timestamp: '10:28 AM',
-    actions: ['生成柱状图', '导出 PPT 提纲', '查看原始数据'],
-  },
-  {
-    id: 3,
-    role: 'user',
-    content: '好的，请帮我生成趋势图和导出 PPT 提纲。另外把华东地区的细节数据给我看看。',
-    timestamp: '10:35 AM',
-  },
-  {
-    id: 4,
-    role: 'ai',
-    content:
-      '已为您生成趋势图并导出 PPT 提纲。\n\n### 📊 趋势图已生成\n- **月度销售趋势图**：显示 10-12 月逐月增长\n- **渠道分布饼图**：线上 45%、线下 55%\n- **区域对比柱状图**：华东领跑\n\n### 📄 PPT 提纲\n1. Q4 整体业绩概览\n2. 各渠道销售表现\n3. 区域市场分析\n4. 产品品类 TOP 10\n5. 2025 Q1 展望\n\n华东地区详细数据已整理如下表...',
-    timestamp: '10:35 AM',
-    actions: ['下载 PPT', '分享报告'],
-  },
-  {
-    id: 5,
-    role: 'user',
-    content: '非常好，请帮我把这个报告分享给管理层，并添加一段简短的总结。',
-    timestamp: '10:42 AM',
-  },
-  {
-    id: 6,
-    role: 'ai',
-    content:
-      '报告已准备完毕，分享链接已生成。\n\n### 📋 执行摘要\n\nQ4 业绩表现强劲，总销售额达 ¥8,420 万，同比增长 12.4%。线上渠道贡献显著提升，华东市场持续引领增长。建议 Q1 重点加大线上投入，并借鉴华东成功经验推广至其他区域。\n\n已为您生成分享链接，有效期 7 天。',
-    timestamp: '10:42 AM',
-    actions: ['复制分享链接', '预览报告'],
-  },
-])
+const messages = ref<Message[]>([])
 
 const chatContainer = ref<HTMLElement>()
 
@@ -142,8 +109,52 @@ const filteredAgents = computed(() => {
 const charCount = computed(() => inputText.value.length)
 const maxChars = 2000
 
+function normalizeConversationId(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function getConversationId(conversation?: ConversationPayload) {
+  return (
+    normalizeConversationId(conversation?.conversationId) ||
+    normalizeConversationId(conversation?.id)
+  )
+}
+
+function openBlankSession(sessionId: string, title?: string, modelKey?: string | null) {
+  const existing = chats.value.find(chat => chat.id === sessionId)
+
+  if (existing) {
+    if (title) {
+      existing.title = title
+    }
+  } else {
+    chats.value.unshift({
+      id: sessionId,
+      title: title || `新会话 ${sessionId}`,
+      icon: markRaw(ChatDotSquare),
+    })
+  }
+
+  if (modelKey && models.some(model => model.value === modelKey)) {
+    selectedModel.value = modelKey
+  }
+
+  selectedChatId.value = sessionId
+  messages.value = []
+  inputText.value = ''
+}
+
 function selectChat(id: string) {
-  selectedChatId.value = id
+  if (id !== selectedChatId.value) {
+    openBlankSession(id)
+  }
+
+  void router.push({
+    name: 'chat-session',
+    params: {
+      sessionId: id
+    }
+  })
 }
 
 function getRouteSessionId() {
@@ -161,24 +172,57 @@ function getRouteSessionId() {
   return ''
 }
 
-function openBlankSession(sessionId: string) {
-  if (!chats.value.some(chat => chat.id === sessionId)) {
-    chats.value.unshift({
-      id: sessionId,
-      title: `新会话 ${sessionId}`,
-      icon: markRaw(ChatDotSquare),
-    })
-  }
-
-  selectedChatId.value = sessionId
-  messages.value = []
-}
-
 function syncRouteSession() {
   const sessionId = getRouteSessionId()
 
-  if (sessionId) {
-    openBlankSession(sessionId)
+  if (!sessionId) {
+    return false
+  }
+
+  openBlankSession(sessionId)
+  return true
+}
+
+function initializeConversationFromLogin() {
+  const initialConversationId = normalizeConversationId(readLoginInfo()?.initialConversationId)
+
+  if (!initialConversationId) {
+    void createConversation({ silent: true, persistAsInitial: true })
+    return
+  }
+
+  openBlankSession(initialConversationId, '新建对话')
+}
+
+async function createConversation(options: CreateConversationOptions = {}) {
+  if (newChatLoading.value) return ''
+
+  newChatLoading.value = true
+  try {
+    const { data } = await http.post<ApiResponse<ConversationPayload>>('/api/v1/conversations', {
+      modelKey: selectedModel.value
+    })
+    const conversation = data.data
+    const conversationId = getConversationId(conversation)
+
+    if (data.success === false || !conversation || !conversationId) {
+      throw new Error(data.message || '新建对话失败')
+    }
+
+    openBlankSession(conversationId, conversation.title || '新建对话', conversation.modelKey)
+    if (options.persistAsInitial) {
+      saveInitialConversationId(conversationId)
+    }
+
+    await nextTick(scrollToBottom)
+    return conversationId
+  } catch (error) {
+    if (!options.silent) {
+      ElMessage.error(getErrorMessage(error, '新建对话失败'))
+    }
+    return ''
+  } finally {
+    newChatLoading.value = false
   }
 }
 
@@ -203,7 +247,10 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
-  syncRouteSession()
+
+  if (!syncRouteSession()) {
+    initializeConversationFromLogin()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -228,25 +275,17 @@ function updateTokenUsage(data: Awaited<ReturnType<typeof callAgent>>) {
 }
 
 async function handleNewChat() {
-  if (newChatLoading.value) return
+  const conversationId = await createConversation()
 
-  newChatLoading.value = true
-  try {
-    const { sessionId } = await createSession()
+  if (!conversationId) return
 
-    openBlankSession(sessionId)
-    await router.push({
-      name: 'chat-session',
-      params: {
-        sessionId
-      }
-    })
-    ElMessage.success('新建对话成功')
-  } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '新建会话失败')
-  } finally {
-    newChatLoading.value = false
-  }
+  await router.push({
+    name: 'chat-session',
+    params: {
+      sessionId: conversationId
+    }
+  })
+  ElMessage.success('新建对话成功')
 }
 
 function handleCreateAgent() {
@@ -258,7 +297,7 @@ async function sendMessage() {
   if (!text || sending.value) return
 
   messages.value.push({
-    id: Date.now(),
+    id: `${Date.now()}-user`,
     role: 'user',
     content: text,
     timestamp: new Date().toLocaleTimeString('en-US', {
@@ -275,7 +314,7 @@ async function sendMessage() {
     const data = await callAgent()
     updateTokenUsage(data)
     messages.value.push({
-      id: Date.now() + 1,
+      id: `${Date.now()}-ai`,
       role: 'ai',
       content: data.payload?.response || data.message || 'Agent 调用完成',
       timestamp: new Date().toLocaleTimeString('en-US', {
@@ -421,7 +460,7 @@ const agentLabel = computed(() => agents.value.find(a => a.value === selectedAge
           <span
             class="shrink-0 rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-medium text-purple-600"
           >
-            GPT-4 Omni
+            {{ modelLabel }}
           </span>
         </div>
         <div class="flex items-center gap-2">

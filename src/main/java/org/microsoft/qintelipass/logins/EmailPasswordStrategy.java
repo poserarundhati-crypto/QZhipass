@@ -5,7 +5,6 @@ import org.microsoft.qintelipass.enums.UserStatus;
 import org.microsoft.qintelipass.models.User;
 import org.microsoft.qintelipass.response.ResponseBody;
 import org.microsoft.qintelipass.services.UserService;
-import org.microsoft.qintelipass.util.QZhiPasswordPattern;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Map;
@@ -26,20 +25,13 @@ public class EmailPasswordStrategy implements ILoginStrategy {
 
     @Override
     public ResponseBody<User> authenticate(Map<String, Object> params) {
-        String email = (String) params.get("email");
-        String password = (String) params.get("password");
+        String email = readString(params, "email");
+        String password = readPassword(params);
 
         if (email == null || email.isBlank() || password == null || password.isBlank()) {
             return ResponseBody.<User>builder()
                     .success(false)
                     .message("Email and password should not be null.")
-                    .build();
-        }
-
-        if (!QZhiPasswordPattern.validate(password)) {
-            return ResponseBody.<User>builder()
-                    .success(false)
-                    .message(QZhiPasswordPattern.REQUIREMENT_MESSAGE)
                     .build();
         }
 
@@ -51,10 +43,10 @@ public class EmailPasswordStrategy implements ILoginStrategy {
                     .build();
         }
 
-        if (UserStatus.DEACTIVATED.equals(user.getStatus())) {
+        if (!UserStatus.NORMAL.equals(user.getStatus())) {
             return ResponseBody.<User>builder()
                     .success(false)
-                    .message("Your account has been deactivated")
+                    .message("Your account is not active")
                     .build();
         }
 
@@ -70,5 +62,15 @@ public class EmailPasswordStrategy implements ILoginStrategy {
                 .message("Login Successful.")
                 .payload(user)
                 .build();
+    }
+
+    private String readString(Map<String, Object> params, String key) {
+        Object value = params.get(key);
+        return value instanceof String text && !text.isBlank() ? text.trim() : null;
+    }
+
+    private String readPassword(Map<String, Object> params) {
+        Object value = params.get("password");
+        return value instanceof String text && !text.isBlank() ? text : null;
     }
 }

@@ -18,4 +18,10 @@ public interface AgentService {
     AgentDeleteResultDTO deleteAgent(Long currentUserId, Long agentId);
 
     void requireActiveAgent(Long currentUserId, Long agentId);
+
+    boolean tryRecordActiveAgentCall(
+            Long currentUserId,
+            Long agentId,
+            Long modelId,
+            int tokensUsed);
 }

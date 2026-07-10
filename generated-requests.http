@@ -1,0 +1,34 @@
+@accessToken = replace-with-access-token
+
+###
+POST http://localhost:7510/api/v1/auth/portal/login
+Content-Type: application/json
+
+{
+  "loginType": "MOBILE_PWD",
+  "credential": {
+    "mobile": "5768677777",
+    "password": "Example!Password1"
+  }
+}
+
+
+###
+POST http://localhost:7510/api/v1/auth/portal/register
+Content-Type: application/json
+
+{
+  "email": "jsdhingy@163.com",
+  "name": "Hello",
+  "password": "Example!Password1",
+  "phone": "12341757999"
+}
+
+
+###
+POST http://localhost:7510/api/v1/agent/call
+Authorization: Bearer {{accessToken}}
+
+###
+DELETE http://localhost:7510/api/v1/auth/portal/logout
+Authorization: Bearer {{accessToken}}

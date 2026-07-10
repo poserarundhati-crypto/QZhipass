@@ -1,5 +1,7 @@
 package org.microsoft.qintelipass.controllers;
 
+import org.microsoft.qintelipass.ITrafficStatService;
+import org.microsoft.qintelipass.dtos.UserDTO;
 import org.microsoft.qintelipass.models.User;
 import org.microsoft.qintelipass.services.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -14,8 +16,13 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/v1/admin")
 public class UserController {
+    private final UserService userService;
+    private final ITrafficStatService trafficStatService;
     @Autowired
-    private UserService userService;
+    public UserController(UserService userService, ITrafficStatService trafficStatService) {
+        this.userService = userService;
+        this.trafficStatService = trafficStatService;
+    }
 
     @GetMapping("/users")
     public ResponseEntity<?> getUsers(
@@ -44,7 +51,9 @@ public class UserController {
             endIndex = Math.min(size, filteredUsers.size());
         }
 
-        List<User> pageUsers = filteredUsers.subList(startIndex, endIndex);
+        List<UserDTO> pageUsers = filteredUsers.subList(startIndex, endIndex).stream()
+                .map(UserDTO::fromUser)
+                .toList();
 
         // 返回格式：{ total: 100, items: [...] }
         Map<String, Object> response = new HashMap<>();
@@ -66,4 +75,14 @@ public class UserController {
         }
         return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Failed to deactivate user. User may not exist or already be deactivated."));
     }
+
+    @GetMapping("/users/active/statistics")
+    public ResponseEntity<?> getActiveUsers(){
+        Map<String, Object> stat = Map.of(
+                "count", trafficStatService.getActiveUsers(),
+                "percent", 0.1
+        );
+        return ResponseEntity.ok().body(stat);
+    }
+
 }

@@ -1,5 +1,5 @@
 import http, { getErrorMessage } from './http'
-import { readAuthCookies, saveLoginInfo, type LoginInfo } from './session'
+import { saveLoginInfo, type LoginInfo } from './session'
 
 type PortalLoginType = 'MOBILE_PWD' | 'EMAIL_PWD' | 'smsLogin' | 'wechatLogin'
 
@@ -47,9 +47,9 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     throw new Error(response.message || '登录失败')
   }
 
-  const cookieInfo = readAuthCookies()
   const data = readRecord(response.data)
   const payload = readRecord(response.payload)
+  const conversation = readRecord(payload.conversation || data.conversation)
   const userId =
     readString(data.user_id) ||
     readString(data.userId) ||
@@ -60,7 +60,6 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     readString(response.user_id) ||
     readString(response.userId) ||
     readString(response.id) ||
-    cookieInfo?.userId ||
     ''
   const accessToken =
     readString(data.access_token) ||
@@ -72,8 +71,15 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
     readString(response.access_token) ||
     readString(response.accessToken) ||
     readString(response.token) ||
-    cookieInfo?.accessToken ||
     ''
+  const initialConversationId =
+    readString(data.initialConversationId) ||
+    readString(data.initial_conversation_id) ||
+    readString(payload.initialConversationId) ||
+    readString(payload.initial_conversation_id) ||
+    readString(conversation.id) ||
+    readString(conversation.conversationId) ||
+    undefined
 
   if (!userId) {
     throw new Error('登录成功但后端未返回 user_id')
@@ -85,7 +91,8 @@ function normalizeLoginInfo(response: PortalLoginResponse): LoginInfo {
 
   return {
     userId,
-    accessToken
+    accessToken,
+    initialConversationId
   }
 }
 
@@ -106,7 +113,13 @@ function normalizeLoginError(message: string, fallback: string) {
     return '用户不存在'
   }
 
-  if (rawMessage.includes('注销') || lowerMessage.includes('deactivated')) {
+  if (
+    rawMessage.includes('注销') ||
+    rawMessage.includes('停用') ||
+    lowerMessage.includes('deactivated') ||
+    lowerMessage.includes('not active') ||
+    lowerMessage.includes('frozen')
+  ) {
     return '您的账户已注销'
   }
 

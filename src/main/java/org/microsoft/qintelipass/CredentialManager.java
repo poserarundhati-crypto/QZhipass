@@ -11,7 +11,6 @@ import org.springframework.stereotype.Component;
 public class CredentialManager {
     @Autowired
     private UserService userService;
-
     private final JwtUtil jwtUtil;
     @Autowired
     public CredentialManager(JwtUtil jwtUtil) {
@@ -22,7 +21,7 @@ public class CredentialManager {
         try {
             return this.userService.findByUsername(jwtUtil.extractUsername(token)) != null;
         } catch (Exception e) {
-            log.info("Token is invalid: {}, Exception: {}", token, e.getMessage());
+            log.info("Token validation failed: {}", e.getClass().getSimpleName());
         }
         return false;
     }

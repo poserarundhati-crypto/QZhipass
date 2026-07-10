@@ -4,6 +4,8 @@ application-local.properties
 
 # Build & Dependency
 target/
+frontend/dist/
+frontend/*.tsbuildinfo
 *.class
 *.jar
 *.war

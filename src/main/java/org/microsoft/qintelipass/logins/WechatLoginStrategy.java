@@ -14,33 +14,36 @@ import java.util.Map;
 @Slf4j
 @Component
 public class WechatLoginStrategy implements ILoginStrategy {
-
     @Autowired
     private UserService userService;
-
     @Override
     public String getType() {
         return "wechatLogin";
     }
 
     @Override
-    public ResponseBody authenticate(Map<String, Object> params) {
-        String wechatOpenId = (String) params.get("wechat_openid");
-        log.info("Wechat login attempt for openid: {}", wechatOpenId);
+    public ResponseBody<User> authenticate(Map<String, Object> params) {
+        Object rawOpenId = params.get("wechat_openid");
+        String wechatOpenId = rawOpenId instanceof String text ? text.trim() : null;
+        log.info("Wechat login attempt received");
         
         if (wechatOpenId == null || wechatOpenId.isEmpty()) {
-            return ResponseBody.builder().success(false).message("Wechat openid could not be NULL.").build();
+            return ResponseBody.<User>builder().success(false).message("Wechat openid could not be NULL").build();
         }
         
         User user = userService.getUserByWechatOpenId(wechatOpenId);
         if (user == null) {
-            return ResponseBody.builder().success(false).message("User not found.").build();
+            return ResponseBody.<User>builder().success(false).message("User not found").build();
         }
         
-        if (UserStatus.DEACTIVATED.equals(user.getStatus())) {
-            return ResponseBody.builder().success(false).message("Your account has been deactivated").build();
+        if (!UserStatus.NORMAL.equals(user.getStatus())) {
+            return ResponseBody.<User>builder().success(false).message("Your account is not active").build();
         }
         
-        return ResponseBody.builder().success(true).message("Login Successful.").payload(user).build();
+        return ResponseBody.<User>builder()
+                .success(true)
+                .message("Login Successful.")
+                .payload(user)
+                .build();
     }
 }

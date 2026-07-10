@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
 import java.util.Collection;
@@ -18,17 +19,17 @@ public class AuthenticatedUser implements UserDetails {
     private Long userId;
     private String username;
     private String password;
-
+    private boolean admin;
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        return Collections.emptyList();
+        return admin
+                ? Collections.singletonList(new SimpleGrantedAuthority("ROLE_ADMIN"))
+                : Collections.emptyList();
     }
-
     @Override
     public String getPassword() {
         return password;
     }
-
     @Override
     public String getUsername() {
         return username;
