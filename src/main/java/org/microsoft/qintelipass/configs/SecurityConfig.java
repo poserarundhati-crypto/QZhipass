@@ -27,6 +27,9 @@ public class SecurityConfig {
     @Autowired
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @Autowired
+    private JsonAuthenticationEntryPoint jsonAuthenticationEntryPoint;
+
     @Bean
     public static PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
@@ -52,6 +55,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/agent/**").authenticated()
                         .anyRequest().permitAll()
                 )
+                .exceptionHandling(exceptions -> exceptions
+                        .defaultAuthenticationEntryPointFor(
+                                jsonAuthenticationEntryPoint,
+                                request -> request.getServletPath().equals("/api/v1/agent")
+                                        || request.getServletPath().startsWith("/api/v1/agent/")))
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
