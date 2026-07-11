@@ -38,6 +38,9 @@ public class ConversationMessage {
     @Column(name = "model_key", length = 100)
     private String modelKey;
 
+    @Column(name = "agent_id")
+    private Long agentId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

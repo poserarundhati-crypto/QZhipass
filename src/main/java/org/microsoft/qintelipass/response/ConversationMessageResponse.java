@@ -12,6 +12,7 @@ public record ConversationMessageResponse(
         String role,
         String content,
         String modelKey,
+        @JsonSerialize(using = ToStringSerializer.class) Long agentId,
         LocalDateTime createdAt
 ) {
     public static ConversationMessageResponse from(ConversationMessage message) {
@@ -21,6 +22,7 @@ public record ConversationMessageResponse(
                 message.getRole().name(),
                 message.getContent(),
                 message.getModelKey(),
+                message.getAgentId(),
                 message.getCreatedAt()
         );
     }

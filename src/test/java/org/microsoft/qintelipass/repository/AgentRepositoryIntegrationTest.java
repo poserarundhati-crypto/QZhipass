@@ -101,6 +101,43 @@ class AgentRepositoryIntegrationTest {
     }
 
     @Test
+    void callableQueriesRequireOwnerActiveStatusAndAvailableFlag() {
+        Agent callable = persistAgent(2101L, OWNER_ID, "Callable Writer", Agent.STATUS_ACTIVE);
+        callable.setPrompt("Use a numbered answer");
+        callable.setBaseModel("qwen3");
+        callable.setAvailable(true);
+
+        Agent disabled = persistAgent(2102L, OWNER_ID, "Disabled Writer", Agent.STATUS_ACTIVE);
+        disabled.setPrompt("Disabled");
+        disabled.setBaseModel("qwen3");
+        disabled.setAvailable(false);
+
+        Agent deleted = persistAgent(2103L, OWNER_ID, "Deleted Writer", Agent.STATUS_DELETED);
+        deleted.setPrompt("Deleted");
+        deleted.setBaseModel("qwen3");
+
+        Agent foreign = persistAgent(2104L, OTHER_OWNER_ID, "Foreign Writer", Agent.STATUS_ACTIVE);
+        foreign.setPrompt("Foreign");
+        foreign.setBaseModel("qwen3");
+        agentRepository.flush();
+
+        List<Long> callableIds = agentRepository
+                .findAllByCreatedByAndStatusAndAvailableTrueOrderByAgentNameAsc(
+                        OWNER_ID, Agent.STATUS_ACTIVE)
+                .stream()
+                .map(Agent::getId)
+                .toList();
+
+        assertEquals(List.of(callable.getId()), callableIds);
+        assertTrue(agentRepository.findByIdAndCreatedByAndStatusAndAvailableTrue(
+                disabled.getId(), OWNER_ID, Agent.STATUS_ACTIVE).isEmpty());
+        assertTrue(agentRepository.findByIdAndCreatedByAndStatusAndAvailableTrue(
+                deleted.getId(), OWNER_ID, Agent.STATUS_ACTIVE).isEmpty());
+        assertTrue(agentRepository.findByIdAndCreatedByAndStatusAndAvailableTrue(
+                foreign.getId(), OWNER_ID, Agent.STATUS_ACTIVE).isEmpty());
+    }
+
+    @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     void concurrentConditionalDeletesChangeExactlyOneRowWithoutErrors() throws Exception {
         long agentId = 3001L;

@@ -4,10 +4,14 @@ import org.microsoft.qintelipass.dtos.AgentDeleteConfirmationDTO;
 import org.microsoft.qintelipass.dtos.AgentDeleteResultDTO;
 import org.microsoft.qintelipass.dtos.AgentDetailDTO;
 import org.microsoft.qintelipass.dtos.AgentListDTO;
+import org.microsoft.qintelipass.dtos.CallableAgentListDTO;
+import org.microsoft.qintelipass.dtos.AgentInvocationConfig;
 import org.microsoft.qintelipass.request.AgentUpdateRequest;
 
 public interface AgentService {
     AgentListDTO listAgents(Long currentUserId, String keyword);
+
+    CallableAgentListDTO listCallableAgents(Long currentUserId, String keyword);
 
     AgentDetailDTO getAgent(Long currentUserId, Long agentId);
 
@@ -18,6 +22,8 @@ public interface AgentService {
     AgentDeleteResultDTO deleteAgent(Long currentUserId, Long agentId);
 
     void requireActiveAgent(Long currentUserId, Long agentId);
+
+    AgentInvocationConfig requireCallableAgent(Long currentUserId, Long agentId);
 
     boolean tryRecordActiveAgentCall(
             Long currentUserId,

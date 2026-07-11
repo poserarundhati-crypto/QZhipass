@@ -22,6 +22,7 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
              where agent.id = :agentId
                and agent.createdBy = :createdBy
                and agent.status = :status
+               and agent.available = true
             """)
     Optional<Agent> findActiveOwnedForUpdate(
             @Param("agentId") Long agentId,
@@ -34,6 +35,20 @@ public interface AgentRepository extends JpaRepository<Agent, Long> {
             Long createdBy,
             Integer status,
             String agentName);
+
+    List<Agent> findAllByCreatedByAndStatusAndAvailableTrueOrderByAgentNameAsc(
+            Long createdBy,
+            Integer status);
+
+    List<Agent> findAllByCreatedByAndStatusAndAvailableTrueAndAgentNameContainingIgnoreCaseOrderByAgentNameAsc(
+            Long createdBy,
+            Integer status,
+            String agentName);
+
+    Optional<Agent> findByIdAndCreatedByAndStatusAndAvailableTrue(
+            Long id,
+            Long createdBy,
+            Integer status);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

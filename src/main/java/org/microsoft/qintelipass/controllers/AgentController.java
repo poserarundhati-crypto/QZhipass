@@ -5,6 +5,7 @@ import org.microsoft.qintelipass.dtos.AgentDeleteConfirmationDTO;
 import org.microsoft.qintelipass.dtos.AgentDeleteResultDTO;
 import org.microsoft.qintelipass.dtos.AgentDetailDTO;
 import org.microsoft.qintelipass.dtos.AgentListDTO;
+import org.microsoft.qintelipass.dtos.CallableAgentListDTO;
 import org.microsoft.qintelipass.dtos.UserTokenUsageDTO;
 import org.microsoft.qintelipass.exceptions.InvalidAgentRequestException;
 import org.microsoft.qintelipass.request.AgentUpdateRequest;
@@ -19,7 +20,7 @@ import java.util.Map;
 
 @Slf4j
 @RestController
-@RequestMapping("/api/v1/agent")
+@RequestMapping({"/api/v1/agent", "/api/v1/agents"})
 public class AgentController {
     private final TokenUsageService tokenUsageService;
     private final AgentService agentService;
@@ -33,6 +34,13 @@ public class AgentController {
     public ResponseEntity<ResponseBody<AgentListDTO>> listAgents(
             @RequestParam(value = "q", required = false) String keyword) {
         AgentListDTO result = agentService.listAgents(currentUserId(), keyword);
+        return ok("success", result);
+    }
+
+    @GetMapping("/callable")
+    public ResponseEntity<ResponseBody<CallableAgentListDTO>> listCallableAgents(
+            @RequestParam(value = "keyword", required = false) String keyword) {
+        CallableAgentListDTO result = agentService.listCallableAgents(currentUserId(), keyword);
         return ok("success", result);
     }
 

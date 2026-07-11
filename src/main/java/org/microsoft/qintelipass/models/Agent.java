@@ -3,6 +3,7 @@ package org.microsoft.qintelipass.models;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -29,4 +30,14 @@ public class Agent {
 
     @Column(name = "status", nullable = false)
     private Integer status;
+
+    @Lob
+    @Column(name = "prompt", nullable = false, columnDefinition = "LONGTEXT")
+    private String prompt = "";
+
+    @Column(name = "base_model", nullable = false, length = 100)
+    private String baseModel = "";
+
+    @Column(name = "available", nullable = false)
+    private boolean available = true;
 }

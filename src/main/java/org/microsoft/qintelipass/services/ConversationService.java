@@ -106,11 +106,75 @@ public class ConversationService {
             modelKey = conversation.getModelKey();
         }
 
+        return persistMessage(conversation, role, content, modelKey, null);
+    }
+
+    @Transactional
+    public ConversationMessageResponse saveGeneratedMessage(
+            Long userId,
+            Long conversationId,
+            ConversationMessageRole role,
+            String content,
+            String modelKey,
+            Long agentId
+    ) {
+        Conversation conversation = requireOwnedConversation(userId, conversationId);
+        if (role != ConversationMessageRole.USER && role != ConversationMessageRole.ASSISTANT) {
+            throw new BadRequestException("Generated chat messages must be USER or ASSISTANT.");
+        }
+        String normalizedContent = normalizeMessageContent(content);
+        String normalizedModelKey = aiModelService.normalizeOptionalModelKey(modelKey);
+        if (normalizedModelKey == null) {
+            normalizedModelKey = conversation.getModelKey();
+        }
+        return persistMessage(conversation, role, normalizedContent, normalizedModelKey, agentId);
+    }
+
+    @Transactional
+    public List<ConversationMessageResponse> saveGeneratedExchange(
+            Long userId,
+            Long conversationId,
+            String userContent,
+            String assistantContent,
+            String modelKey,
+            Long agentId
+    ) {
+        Conversation conversation = requireOwnedConversation(userId, conversationId);
+        String normalizedUserContent = normalizeMessageContent(userContent);
+        String normalizedAssistantContent = normalizeMessageContent(assistantContent);
+        String normalizedModelKey = aiModelService.normalizeOptionalModelKey(modelKey);
+        if (normalizedModelKey == null) {
+            normalizedModelKey = conversation.getModelKey();
+        }
+        ConversationMessageResponse userMessage = persistMessage(
+                conversation,
+                ConversationMessageRole.USER,
+                normalizedUserContent,
+                normalizedModelKey,
+                agentId);
+        ConversationMessageResponse assistantMessage = persistMessage(
+                conversation,
+                ConversationMessageRole.ASSISTANT,
+                normalizedAssistantContent,
+                normalizedModelKey,
+                agentId);
+        return List.of(userMessage, assistantMessage);
+    }
+
+    private ConversationMessageResponse persistMessage(
+            Conversation conversation,
+            ConversationMessageRole role,
+            String content,
+            String modelKey,
+            Long agentId
+    ) {
+
         ConversationMessage message = new ConversationMessage();
         message.setConversation(conversation);
         message.setRole(role);
         message.setContent(content);
         message.setModelKey(modelKey);
+        message.setAgentId(agentId);
 
         ConversationMessage savedMessage = messageRepository.save(message);
         LocalDateTime now = LocalDateTime.now();

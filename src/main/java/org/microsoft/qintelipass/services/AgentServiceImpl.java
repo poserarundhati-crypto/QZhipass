@@ -5,6 +5,9 @@ import org.microsoft.qintelipass.dtos.AgentDeleteResultDTO;
 import org.microsoft.qintelipass.dtos.AgentDetailDTO;
 import org.microsoft.qintelipass.dtos.AgentListDTO;
 import org.microsoft.qintelipass.dtos.AgentSummaryDTO;
+import org.microsoft.qintelipass.dtos.AgentInvocationConfig;
+import org.microsoft.qintelipass.dtos.CallableAgentDTO;
+import org.microsoft.qintelipass.dtos.CallableAgentListDTO;
 import org.microsoft.qintelipass.exceptions.AgentNotFoundException;
 import org.microsoft.qintelipass.exceptions.InvalidAgentRequestException;
 import org.microsoft.qintelipass.models.Agent;
@@ -12,6 +15,7 @@ import org.microsoft.qintelipass.repository.AgentRepository;
 import org.microsoft.qintelipass.request.AgentUpdateRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 
@@ -41,6 +45,30 @@ public class AgentServiceImpl implements AgentService {
                 .map(agent -> new AgentSummaryDTO(agent.getId().toString(), agent.getAgentName()))
                 .toList();
         return new AgentListDTO(items, items.size());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public CallableAgentListDTO listCallableAgents(Long currentUserId, String keyword) {
+        requireCurrentUser(currentUserId);
+        String normalizedKeyword = keyword == null ? "" : keyword.trim();
+        List<Agent> agents = normalizedKeyword.isEmpty()
+                ? agentRepository.findAllByCreatedByAndStatusAndAvailableTrueOrderByAgentNameAsc(
+                        currentUserId, Agent.STATUS_ACTIVE)
+                : agentRepository
+                        .findAllByCreatedByAndStatusAndAvailableTrueAndAgentNameContainingIgnoreCaseOrderByAgentNameAsc(
+                                currentUserId, Agent.STATUS_ACTIVE, normalizedKeyword);
+        List<CallableAgentDTO> items = agents.stream()
+                .filter(this::hasCompleteInvocationData)
+                .map(agent -> new CallableAgentDTO(
+                        agent.getId().toString(),
+                        agent.getAgentName(),
+                        true,
+                        agent.getBaseModel(),
+                        agent.getCreatedBy().toString(),
+                        true))
+                .toList();
+        return new CallableAgentListDTO(items, items.size());
     }
 
     @Override
@@ -113,6 +141,23 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public AgentInvocationConfig requireCallableAgent(Long currentUserId, Long agentId) {
+        requireCurrentUser(currentUserId);
+        validateAgentId(agentId);
+        Agent agent = agentRepository
+                .findByIdAndCreatedByAndStatusAndAvailableTrue(
+                        agentId, currentUserId, Agent.STATUS_ACTIVE)
+                .filter(this::hasCompleteInvocationData)
+                .orElseThrow(AgentNotFoundException::new);
+        return new AgentInvocationConfig(
+                agent.getId(),
+                agent.getAgentName(),
+                agent.getPrompt(),
+                agent.getBaseModel());
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public boolean tryRecordActiveAgentCall(
             Long currentUserId,
@@ -142,6 +187,13 @@ public class AgentServiceImpl implements AgentService {
 
     private AgentDetailDTO toDetail(Agent agent) {
         return new AgentDetailDTO(agent.getId().toString(), agent.getAgentName());
+    }
+
+    private boolean hasCompleteInvocationData(Agent agent) {
+        return agent != null
+                && StringUtils.hasText(agent.getAgentName())
+                && StringUtils.hasText(agent.getPrompt())
+                && StringUtils.hasText(agent.getBaseModel());
     }
 
     private void requireCurrentUser(Long currentUserId) {
